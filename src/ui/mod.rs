@@ -1,6 +1,7 @@
 //! The window: top bar, quick-add bar, and the Today / Calendar views.
 
 mod board;
+mod body;
 mod charts;
 mod streaks;
 pub mod theme;
@@ -25,6 +26,7 @@ enum View {
     Today,
     Calendar,
     Charts,
+    Body,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -114,6 +116,7 @@ pub struct App {
     /// Entry bar mode for this session (starts from the default in Settings).
     claude_session: bool,
     chart_period: charts::Period,
+    body_ui: body::BodyUi,
     board: board::BoardState,
     /// Claude's answer waiting for Apply / Discard: (what was asked, import JSON).
     claude_reply: Option<(String, String)>,
@@ -156,6 +159,7 @@ impl App {
             last_status: String::new(),
             claude_session: start_in_claude,
             chart_period: charts::Period::Month,
+            body_ui: body::BodyUi::default(),
             board: board::BoardState::default(),
             claude_reply: None,
             claude_error: None,
@@ -309,7 +313,7 @@ impl App {
     /// Day that quick-add uses when the text has no date.
     fn default_day(&self) -> NaiveDate {
         match self.view {
-            View::Today | View::Charts => Local::now().date_naive(),
+            View::Today | View::Charts | View::Body => Local::now().date_naive(),
             View::Calendar => self.selected,
         }
     }
@@ -351,6 +355,23 @@ impl App {
             Command::Weight(kg) => {
                 data.status = format!("{kg} kg doesn't look like a body weight");
                 return true;
+            }
+            Command::Goal { kg, by } => {
+                let date = match &by {
+                    Some(text) => match crate::parse::parse_date(text, today).filter(|d| *d > today) {
+                        Some(d) => d,
+                        None => {
+                            data.status = format!("Couldn't read \"{text}\" as a future date");
+                            return true;
+                        }
+                    },
+                    None => crate::body::default_target_date(data.current_weight().unwrap_or(kg), kg, today),
+                };
+                if let Err(e) = body::set_goal(data, kg, date) {
+                    data.status = e;
+                    return true;
+                }
+                self.body_ui.reset();
             }
             Command::Done(q) => match Self::find_task(data, &q) {
                 Some(i) => {
@@ -417,6 +438,15 @@ impl App {
                     Some(kg) => format!("Weight {kg:.1} kg saved"),
                     None => "Today's weight removed".into(),
                 };
+                // first weigh-in at or under the goal
+                if let (Some(kg), Some(g)) = (kg, data.body.goal.as_mut()) {
+                    if g.reached_on.is_none() && g.start_kg > g.target_kg && kg <= g.target_kg {
+                        g.reached_on = Some(today);
+                        let target = g.target_kg;
+                        data.save_body();
+                        data.status = format!("🎉 Goal reached: {target:.1} kg! The plan switches to maintenance.");
+                    }
+                }
             }
             Action::DeleteCalories(id) => {
                 data.calories.retain(|c| c.id != id);
@@ -595,6 +625,8 @@ impl App {
                     Command::Calories { kcal, what } if what.is_empty() => format!("» log {kcal} kcal"),
                     Command::Calories { kcal, what } => format!("» log {kcal} kcal · {what}"),
                     Command::Weight(kg) => format!("» weight {kg:.1} kg today"),
+                    Command::Goal { kg, by: Some(by) } => format!("» goal {kg:.1} kg by {by}"),
+                    Command::Goal { kg, by: None } => format!("» goal {kg:.1} kg (at 0.5 kg/week)"),
                     Command::Done(q) => match Self::find_task(data, &q) {
                         Some(i) => format!("» tick off \"{}\"", data.items[i].title),
                         None => format!("» no task matching \"{q}\" today"),
@@ -752,6 +784,9 @@ impl eframe::App for App {
             View::Charts => {
                 egui::CentralPanel::default().show(ctx, |ui| charts::charts(ui, &data, &mut self.chart_period));
             }
+            View::Body => {
+                egui::CentralPanel::default().show(ctx, |ui| body::body(ui, &mut data, &mut self.body_ui));
+            }
             View::Calendar => {
                 egui::SidePanel::right("day_panel").resizable(true).default_width(330.0).min_width(240.0).show(ctx, |ui| {
                     views::day_panel(ui, &data, self.selected, &mut actions);
@@ -822,7 +857,7 @@ fn logo_mark(ui: &mut egui::Ui) {
 /// The main tabs as a segmented pill control with icons.
 fn tab_bar(ui: &mut egui::Ui, view: &mut View) {
     let t = theme::th();
-    let tabs = [(View::Today, "✔", "Habits"), (View::Calendar, "📅", "Calendar"), (View::Charts, "📈", "Charts")];
+    let tabs = [(View::Today, "✔", "Habits"), (View::Calendar, "📅", "Calendar"), (View::Charts, "📈", "Charts"), (View::Body, "⚖", "Body")];
     let font = egui::FontId::proportional(14.5);
     let (pad_x, h) = (14.0, 30.0);
     let galleys: Vec<_> = tabs

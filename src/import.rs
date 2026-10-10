@@ -516,9 +516,19 @@ pub fn ai_context(data: &Data, days_ahead: i64) -> String {
         today.format("%A"),
         now.format("%H:%M"),
         iana_time_zone::get_timezone().unwrap_or_else(|_| "local".into()),
-        match data.weights.last() {
-            Some(w) => format!("Latest weight: {:.1} kg on {}.", w.kg, w.date),
-            None => "No weight logged yet.".to_string(),
+        {
+            let mut t = match data.weights.last() {
+                Some(w) => format!("Latest weight: {:.1} kg on {}.", w.kg, w.date),
+                None => "No weight logged yet.".to_string(),
+            };
+            if let Some(g) = &data.body.goal {
+                t += &format!(" Goal: {:.1} kg by {}.", g.target_kg, g.target_date);
+            }
+            match data.daily_limit() {
+                0 => {}
+                k => t += &format!(" Daily calorie limit: {k} kcal."),
+            }
+            t
         },
         serde_json::to_string_pretty(&relevant).unwrap_or_default(),
         data.calories_on(today),

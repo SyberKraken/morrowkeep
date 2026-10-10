@@ -5,7 +5,7 @@ use super::{weight_color, calorie_color};
 use crate::store::Data;
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use eframe::egui::{self, RichText, Ui};
-use egui_plot::{Bar, BarChart, GridInput, GridMark, Line, Plot, PlotPoints, Points};
+use egui_plot::{Bar, BarChart, Corner, GridInput, GridMark, HLine, Legend, Line, LineStyle, Plot, PlotPoints, Points};
 
 
 #[derive(Clone, Copy, PartialEq)]
@@ -129,22 +129,43 @@ pub fn charts(ui: &mut Ui, data: &Data, period: &mut Period) {
     });
     let from = today - Duration::days(period.days() - 1);
     let chart_h = ((ui.available_height() - 120.0) / 2.0).clamp(180.0, 320.0);
+    // Both charts run to the goal's target date when it's within one more period, so their
+    // date axes stay aligned.
+    let end = match &data.body.goal {
+        Some(g) if g.target_date > today && (g.target_date - today) <= (today - from) + Duration::days(1) => g.target_date + Duration::days(2),
+        _ => today,
+    };
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         super::streaks::streaks_section(ui, data, period.days());
         ui.add_space(18.0);
-        weight_chart(ui, data, from, today, chart_h);
+        weight_chart(ui, data, from, today, end, chart_h);
         ui.add_space(14.0);
-        calorie_chart(ui, data, from, today, chart_h);
+        calorie_chart(ui, data, from, today, end, chart_h);
     });
 }
 
-fn weight_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, height: f32) {
+/// Part of the straight line a→b that lies within [lo, hi] on the x axis.
+fn clip(a: [f64; 2], b: [f64; 2], lo: f64, hi: f64) -> Option<Vec<[f64; 2]>> {
+    let (x0, x1) = (a[0].max(lo), b[0].min(hi));
+    if x1 <= x0 || b[0] <= a[0] {
+        return None;
+    }
+    let at = |x: f64| [x, a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0])];
+    Some(vec![at(x0), at(x1)])
+}
+
+/// Weigh-ins, their 7-day average and where the recent pace leads, plus the goal: target
+/// line, a star on the target date and the planned path from where the goal started.
+fn weight_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, end: NaiveDate, height: f32) {
+    let t = super::theme::th();
     let pts: Vec<[f64; 2]> = data
         .weights
         .iter()
         .filter(|w| w.date >= from && w.date <= to)
         .map(|w| [x(w.date), w.kg as f64])
         .collect();
+    let goal = data.body.goal.clone();
+    let progress = goal.as_ref().and_then(|g| crate::body::progress(g, &data.weights, to));
     ui.horizontal(|ui| {
         ui.label(RichText::new("Weight").size(17.0).strong());
         if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
@@ -155,37 +176,101 @@ fn weight_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, height
             ui.label(RichText::new(format!("{:+.1} kg over this period · range {lo:.1}–{hi:.1} kg", change)).weak());
         }
     });
+    if let (Some(g), Some(p)) = (&goal, &progress) {
+        let mut text = format!("Goal {:.1} kg by {}", g.target_kg, g.target_date.format("%b %-d, %Y"));
+        if g.start_kg > g.target_kg {
+            text += &format!(" · {:.1} kg to go · {}", p.to_go.max(0.0), p.status());
+            if let Some(eta) = p.eta {
+                text += &format!(" · at this pace {:.1} kg around {}", g.target_kg, eta.format("%b %-d"));
+            }
+        }
+        ui.label(RichText::new(text).color(t.data.goal));
+    }
     if pts.is_empty() {
         super::streaks::empty_state(ui, "No weight logged in this period", "Type your weight in the entry bar (e.g. \"82.4 kg\") or on the Habits page.");
         return;
     }
-    let lo = pts.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-    let hi = pts.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+    let (lo_x, hi_x) = (x(from) - 0.5, x(end) + 0.5);
+    let trend: Vec<[f64; 2]> = crate::body::trend_series(&data.weights)
+        .into_iter()
+        .filter(|(d, _)| *d >= from && *d <= to)
+        .map(|(d, k)| [x(d), k as f64])
+        .collect();
+    let ideal = goal.as_ref().and_then(|g| clip([x(g.set_on), g.start_kg as f64], [x(g.target_date), g.target_kg as f64], lo_x, hi_x));
+    // Projection: the recent pace carried forward from the last average point, until the
+    // target (or the edge of the chart).
+    let projection = trend.last().and_then(|last| {
+        let pace = crate::body::recent_pace(&data.weights)? as f64;
+        let mut stop = hi_x;
+        if let Some(g) = goal.as_ref().filter(|g| pace < 0.0 && (g.target_kg as f64) < last[1]) {
+            stop = stop.min(last[0] + (last[1] - g.target_kg as f64) / -pace);
+        }
+        (stop - last[0] >= 2.0).then(|| vec![*last, [stop, last[1] + pace * (stop - last[0])]])
+    });
+
+    let mut ys: Vec<f64> = pts.iter().map(|p| p[1]).collect();
+    if let Some(g) = &goal {
+        ys.push(g.target_kg as f64);
+    }
+    ys.extend(ideal.iter().flatten().map(|p| p[1]));
+    ys.extend(projection.iter().flatten().map(|p| p[1]));
+    let lo = ys.iter().copied().fold(f64::MAX, f64::min);
+    let hi = ys.iter().copied().fold(f64::MIN, f64::max);
     let pad = ((hi - lo) * 0.15).max(1.0);
     let n = pts.len();
-    base_plot("weight_chart", from, to, height)
+    let resp = base_plot("weight_chart", from, end, height)
         .include_y(lo - pad)
         .include_y(hi + pad)
+        .legend(Legend::default().position(Corner::LeftBottom))
         .y_axis_formatter(|m, _| format!("{:.0} kg", m.value))
         .label_formatter(|_, p| match date(p.x) {
             Some(d) => format!("{}\n{:.1} kg", d.format("%a %b %-d"), p.y),
             None => String::new(),
         })
         .show(ui, |plot| {
-            let fill = super::theme::th().charts.line_fill_alpha;
-            let mut line = Line::new(PlotPoints::new(pts.clone())).color(weight_color()).width(2.0).name("Weight");
+            let fill = t.charts.line_fill_alpha;
+            let mut line = Line::new(PlotPoints::new(pts.clone())).color(weight_color().gamma_multiply(0.7)).width(1.2).name("Weigh-ins");
             if fill > 0.0 {
                 line = line.fill((lo - pad) as f32).fill_alpha(fill);
             }
             plot.line(line);
             // markers only while they stay readable
             if n <= 120 {
-                plot.points(Points::new(PlotPoints::new(pts)).color(weight_color()).radius(3.5).name("Weight"));
+                plot.points(Points::new(PlotPoints::new(pts)).color(weight_color()).radius(3.5).name("Weigh-ins"));
+            }
+            if trend.len() >= 2 {
+                plot.line(Line::new(PlotPoints::new(trend)).color(t.data.trend).width(2.5).name("7-day average"));
+            }
+            if let Some(p) = projection {
+                plot.line(Line::new(PlotPoints::new(p)).color(t.data.trend).width(2.0).style(LineStyle::dotted_dense()).name("At this pace"));
+            }
+            if let Some(g) = &goal {
+                plot.hline(
+                    HLine::new(g.target_kg as f64)
+                        .color(t.data.goal.gamma_multiply(0.8))
+                        .width(1.5)
+                        .style(LineStyle::dashed_loose())
+                        .name(format!("Goal {:.1} kg", g.target_kg)),
+                );
+                if let Some(path) = ideal {
+                    plot.line(Line::new(PlotPoints::new(path)).color(t.data.goal.gamma_multiply(0.45)).width(1.5).style(LineStyle::dashed_dense()).name("Planned path"));
+                }
             }
         });
+    // the target: a star on the target date
+    if let Some(g) = &goal {
+        let gx = x(g.target_date);
+        if gx >= lo_x && gx <= hi_x {
+            let tr = resp.transform;
+            let pos = egui::pos2(tr.position_from_point_x(gx), tr.position_from_point_y(g.target_kg as f64));
+            let painter = ui.painter_at(*tr.frame());
+            painter.circle_filled(pos, 11.0, t.data.goal.gamma_multiply(0.2));
+            super::streaks::four_point_star(&painter, pos, 8.0, t.data.goal);
+        }
+    }
 }
 
-fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, height: f32) {
+fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, end: NaiveDate, height: f32) {
     let mut daily: Vec<(NaiveDate, u32)> = Vec::new();
     let mut d = from;
     while d <= to {
@@ -195,7 +280,7 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
         }
         d += Duration::days(1);
     }
-    let limit = data.settings.daily_calorie_limit;
+    let limit = data.daily_limit();
     // Past days without food logged, counted from when calorie tracking started.
     let tracked_from = data.calories.iter().map(|c| c.date).min().unwrap_or(to).max(from);
     let unlogged = ((to - tracked_from).num_days().max(0) as usize)
@@ -235,7 +320,7 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
         .collect();
     // egui_plot can't round bars, so the chart's own bars are invisible (they still give the
     // hover tooltips) and rounded bars are painted on top through the plot's transform.
-    let resp = base_plot("calorie_chart", from, to, height)
+    let resp = base_plot("calorie_chart", from, end, height)
         .include_y(0.0)
         .include_y(max as f64 * 1.1)
         .y_axis_formatter(|m, _| format!("{:.0}", m.value))
@@ -267,6 +352,7 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
         painter.extend(egui::Shape::dashed_line(&[egui::pos2(f.left(), y), egui::pos2(f.right(), y)], egui::Stroke::new(1.5, t.data.chart_limit_line), 8.0, 6.0));
     }
     if limit > 0 {
-        ui.label(RichText::new(format!("Dashed line: your daily limit ({limit} kcal)")).weak().size(12.0));
+        let source = if data.limit_from_plan() { "from your Body plan" } else { "the fallback limit" };
+        ui.label(RichText::new(format!("Dashed line: today's daily limit ({limit} kcal, {source})")).weak().size(12.0));
     }
 }

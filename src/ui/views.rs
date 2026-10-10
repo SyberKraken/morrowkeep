@@ -298,7 +298,11 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mu
                 ui.label(RichText::new(text).size(18.0).strong().color(color));
                 ui.add(egui::ProgressBar::new(frac).desired_width(ui.available_width()).fill(color.linear_multiply(0.8)));
                 ui.label(RichText::new(format!("Recommended today: {rec} kcal")).weak().size(12.5))
-                    .on_hover_text("What's left of this month's calorie budget, spread over the days left in the month. Going over one day lowers the next days.");
+                    .on_hover_text(format!(
+                        "What's left of this month's calorie budget, spread over the days left in the month. Going over one day lowers the next days.\nDaily limit: {} kcal ({})",
+                        data.daily_limit(),
+                        if data.limit_from_plan() { "from your Body plan" } else { "fallback limit" }
+                    ));
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -365,6 +369,17 @@ fn weight_row(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut 
                 }
                 (None, None) => {
                     ui.label(RichText::new("Not weighed today").color(not_logged_color()));
+                }
+            }
+            if let Some(g) = &data.body.goal {
+                if let Some(p) = crate::body::progress(g, &data.weights, today).filter(|_| g.start_kg > g.target_kg) {
+                    let text = if p.to_go <= 0.0 {
+                        format!("Goal {:.1} kg reached 🎉", g.target_kg)
+                    } else {
+                        format!("{:.1} kg to go to {:.1} kg · {}", p.to_go, g.target_kg, p.status())
+                    };
+                    ui.label(RichText::new(text).size(12.5).color(super::theme::th().data.goal))
+                        .on_hover_text("Based on your 7-day average weight. Details on the Body tab.");
                 }
             }
             ui.horizontal(|ui| {
@@ -470,7 +485,7 @@ pub fn day_panel(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Act
             calorie_list(ui, data, day, actions);
         } else if day < Local::now().date_naive() {
             section(ui, "CALORIES", 0);
-            let limit = data.settings.daily_calorie_limit;
+            let limit = data.daily_limit();
             let note = if limit > 0 {
                 format!("No food logged. Counted as your daily limit ({limit} kcal).")
             } else {
@@ -558,7 +573,7 @@ fn month_calorie_bar(ui: &mut Ui, data: &Data, anchor: NaiveDate) {
                         }),
                 )
                 .on_hover_text({
-                    let limit = data.settings.daily_calorie_limit;
+                    let limit = data.daily_limit();
                     let mut t = format!("Budget = {limit} kcal daily limit × {} days", crate::store::days_in_month(anchor));
                     t += &format!("\nLogged: {} kcal", tally.logged);
                     if tally.unlogged_past_days > 0 {
@@ -576,7 +591,7 @@ fn month_calorie_bar(ui: &mut Ui, data: &Data, anchor: NaiveDate) {
             }
             None => {
                 ui.label(RichText::new(format!("{month}: {total} kcal")).strong().color(calorie_color()));
-                ui.label(RichText::new("Set a daily calorie limit in Settings to get a monthly budget").weak().size(12.0));
+                ui.label(RichText::new("Set up the Body tab (or a fallback daily limit there) to get a monthly budget").weak().size(12.0));
             }
         }
     });

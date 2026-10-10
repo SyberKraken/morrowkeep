@@ -480,20 +480,7 @@ impl SettingsDlg {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.heading("Calories");
-                ui.horizontal(|ui| {
-                    ui.label("Daily calorie limit");
-                    ui.add(egui::DragValue::new(&mut self.draft.daily_calorie_limit).range(0..=10000).speed(10).suffix(" kcal"));
-                    ui.label(RichText::new("0 = off").weak().size(12.0));
-                });
-                ui.label(
-                    RichText::new(
-                        "Sets the monthly budget (limit × days in the month), shown as a bar in the calendar's month view. \
-                         Today shows a recommended amount instead: what's left of the month's budget spread over the remaining days, \
-                         so going over one day lowers the next days.",
-                    )
-                    .weak()
-                    .size(12.0),
-                );
+                ui.label(RichText::new("The daily calorie limit is on the Body tab: worked out from your profile and goal weight, or a fallback limit you set there.").weak().size(12.5));
 
                 ui.add_space(8.0);
                 ui.separator();

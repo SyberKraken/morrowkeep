@@ -227,6 +227,9 @@ pub struct StatusColors {
     pub success: Color32,
     #[serde(with = "hex")]
     pub danger: Color32,
+    /// Cautions that aren't errors (e.g. a goal pace that's faster than safe).
+    #[serde(with = "hex")]
+    pub warning: Color32,
     /// Background of error banners.
     #[serde(with = "hex")]
     pub danger_background: Color32,
@@ -263,6 +266,12 @@ pub struct DataColors {
     /// Dashed daily-limit line in the calorie chart.
     #[serde(with = "hex")]
     pub chart_limit_line: Color32,
+    /// Goal weight: target line, target star and ideal path in the weight chart, goal progress.
+    #[serde(with = "hex")]
+    pub goal: Color32,
+    /// The 7-day average weight line and its projection.
+    #[serde(with = "hex")]
+    pub trend: Color32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -320,7 +329,7 @@ impl Default for WidgetColors {
 
 impl Default for StatusColors {
     fn default() -> Self {
-        StatusColors { success: rgb(46, 160, 103), danger: rgb(220, 80, 60), danger_background: rgb(120, 30, 30) }
+        StatusColors { success: rgb(46, 160, 103), danger: rgb(220, 80, 60), warning: rgb(232, 165, 50), danger_background: rgb(120, 30, 30) }
     }
 }
 
@@ -337,6 +346,8 @@ impl Default for DataColors {
             gold: rgb(232, 182, 48),
             now_line: rgb(220, 60, 60),
             chart_limit_line: rgb(150, 150, 150),
+            goal: rgb(80, 200, 160),
+            trend: rgb(150, 190, 255),
         }
     }
 }
@@ -414,7 +425,7 @@ fn daylight() -> Theme {
             selection_border: rgb(40, 70, 170),
             link: rgb(50, 90, 200),
         },
-        status: StatusColors { success: rgb(30, 140, 85), danger: rgb(200, 60, 40), danger_background: rgb(250, 220, 215) },
+        status: StatusColors { success: rgb(30, 140, 85), danger: rgb(200, 60, 40), warning: rgb(196, 125, 10), danger_background: rgb(250, 220, 215) },
         kinds: [
             ("workout", rgb(30, 140, 85)),
             ("meal", rgb(214, 110, 20)),
@@ -438,6 +449,8 @@ fn daylight() -> Theme {
             gold: rgb(200, 150, 20),
             now_line: rgb(210, 50, 50),
             chart_limit_line: rgb(140, 140, 150),
+            goal: rgb(20, 150, 110),
+            trend: rgb(20, 60, 150),
         },
         sky: Sky { star: Color32::from_rgba_unmultiplied(90, 105, 150, 90), density: 0.6 },
         shape: Shape::default(),

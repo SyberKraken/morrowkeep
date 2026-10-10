@@ -117,7 +117,7 @@ fn ring(p: &Painter, c: Pos2, r: f32, color: Color32) {
 }
 
 /// 4-point star made of two crossing diamonds (each convex, so egui can fill them).
-fn four_point_star(p: &Painter, c: Pos2, r: f32, color: Color32) {
+pub fn four_point_star(p: &Painter, c: Pos2, r: f32, color: Color32) {
     let t = r * 0.28;
     p.add(Shape::convex_polygon(
         vec![c + Vec2::new(0.0, -r), c + Vec2::new(t, 0.0), c + Vec2::new(0.0, r), c + Vec2::new(-t, 0.0)],
@@ -329,8 +329,11 @@ pub fn streaks_section(ui: &mut Ui, data: &Data, period_days: i64) {
         i += 1;
     }
 
+    // Today's open nodes pulse while the pointer is over the window (and motion is on);
+    // otherwise they hold still so an idle window doesn't repaint.
+    let animate = super::theme::anim(1.0) > 0.0 && ui.ctx().pointer_hover_pos().is_some();
     let time = ui.input(|i| i.time) as f32;
-    let pulse = (time * 2.2).sin() * 0.5 + 0.5;
+    let pulse = if animate { (time * 2.2).sin() * 0.5 + 0.5 } else { 0.5 };
     let mut any_pending = false;
     let faint = with_alpha(ui.visuals().weak_text_color(), 0.9);
     let grid = ui.visuals().widgets.noninteractive.bg_stroke.color;
@@ -413,7 +416,7 @@ pub fn streaks_section(ui: &mut Ui, data: &Data, period_days: i64) {
         }
     }
 
-    if any_pending {
+    if any_pending && animate {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(40));
     }
 }

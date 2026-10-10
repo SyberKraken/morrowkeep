@@ -420,6 +420,8 @@ pub enum Command {
     Calories { kcal: u32, what: String },
     /// "82.4 kg", "weight 82,4", "weighed 82.4"
     Weight(f32),
+    /// "goal 76 kg by feb 1", "target weight 76", "goal weight 75.5 kg by 2027-03-01"
+    Goal { kg: f32, by: Option<String> },
     /// "done vacuum", "did push-ups": tick off a matching task for today
     Done(String),
     /// "ate a chicken burrito": food without a number, for a Claude estimate
@@ -464,6 +466,26 @@ pub fn parse_command(input: &str) -> Option<Command> {
     // done / did <task>
     if matches!(toks[0], "done" | "did" | "finished" | "completed") && toks.len() > 1 {
         return Some(Command::Done(rest_after(1)));
+    }
+    // goal weight: the date is parsed by the caller (it needs today's date)
+    if matches!(toks[0], "goal" | "target" | "mål") {
+        let mut i = 1;
+        if matches!(toks.get(1), Some(&"weight") | Some(&"vikt")) {
+            i = 2;
+        }
+        let num = toks.get(i).map(|t| t.trim_end_matches("kg")).and_then(number);
+        if let Some(kg) = num {
+            let mut j = i + 1;
+            if toks.get(j) == Some(&"kg") {
+                j += 1;
+            }
+            let by = match toks.get(j) {
+                Some(&"by") | Some(&"until") | Some(&"before") | Some(&"till") => Some(rest_after(j + 1)),
+                Some(_) => Some(rest_after(j)),
+                None => None,
+            };
+            return Some(Command::Goal { kg, by: by.filter(|b| !b.is_empty()) });
+        }
     }
     // weight
     if matches!(toks[0], "weight" | "weigh" | "weighed" | "weighing" | "weigh-in" | "vikt") {
@@ -594,6 +616,9 @@ mod tests {
         assert_eq!(parse_command("kcal 250 apple"), Some(Command::Calories { kcal: 250, what: "apple".into() }));
         assert_eq!(parse_command("snack 180kcal"), Some(Command::Calories { kcal: 180, what: "Snack".into() }));
         assert_eq!(parse_command("82,4 kg"), Some(Command::Weight(82.4)));
+        assert_eq!(parse_command("goal 76 kg by feb 1"), Some(Command::Goal { kg: 76.0, by: Some("feb 1".into()) }));
+        assert_eq!(parse_command("target weight 75,5"), Some(Command::Goal { kg: 75.5, by: None }));
+        assert_eq!(parse_command("goal 74kg 2027-03-01"), Some(Command::Goal { kg: 74.0, by: Some("2027-03-01".into()) }));
         assert_eq!(parse_command("weight 81.9"), Some(Command::Weight(81.9)));
         assert_eq!(parse_command("done vacuum"), Some(Command::Done("vacuum".into())));
         assert_eq!(parse_command("ate a chicken burrito"), Some(Command::Food("a chicken burrito".into())));

@@ -17,6 +17,7 @@ pub struct Paths {
     pub calories: PathBuf,
     pub weight: PathBuf,
     pub settings: PathBuf,
+    pub body: PathBuf,
     pub token: PathBuf,
     pub gcache: PathBuf,
     pub sync_state: PathBuf,
@@ -38,6 +39,7 @@ impl Paths {
             calories: root.join("calories.json"),
             weight: root.join("weight.json"),
             settings: root.join("settings.json"),
+            body: root.join("body.json"),
             token: root.join("google_token.json"),
             gcache: root.join("google_events_cache.json"),
             sync_state: root.join("sync_state.json"),
@@ -63,9 +65,9 @@ pub struct Settings {
     pub sync_interval_min: u32,
     /// Whisper model file name inside the models folder.
     pub whisper_model: String,
-    /// Daily calorie limit (0 = none). It sets the monthly budget (limit × days in month);
-    /// Today shows a recommended amount that spreads what's left of that budget.
-    #[serde(alias = "calorie_goal")]
+    /// Old home of the daily calorie limit; moved to body.json (`fallback_daily_limit`).
+    /// Only read, to carry it over once.
+    #[serde(alias = "calorie_goal", skip_serializing)]
     pub daily_calorie_limit: u32,
     /// "en", "sv", ... or "auto". Non-English needs a multilingual model (no ".en").
     pub voice_language: String,
@@ -167,6 +169,10 @@ pub struct Data {
     /// Sorted by date, at most one per day.
     pub weights: Vec<WeightEntry>,
     pub settings: Settings,
+    /// Profile, goal weight and fallback calorie limit (body.json).
+    pub body: crate::body::Body,
+    /// body.json couldn't be parsed: it isn't overwritten until the app restarts with it fixed.
+    pub body_error: Option<String>,
     pub sync: SyncState,
     pub gcache: Vec<ExtEvent>,
     pub google_connected: bool,
@@ -200,7 +206,13 @@ impl Data {
         // Keep a copy of the import spec next to the data so AI tools / you can find it.
         let _ = fs::write(paths.root.join("IMPORT_FORMAT.md"), IMPORT_FORMAT);
 
-        let settings = read_json(&paths.settings).ok().flatten().unwrap_or_default();
+        let settings: Settings = read_json(&paths.settings).ok().flatten().unwrap_or_default();
+        let (body, body_error) = match read_json(&paths.body) {
+            Ok(Some(b)) => (b, None),
+            // first run with body.json: carry over the limit from settings.json
+            Ok(None) => (crate::body::Body { fallback_daily_limit: settings.daily_calorie_limit, ..Default::default() }, None),
+            Err(e) => (crate::body::Body::default(), Some(e)),
+        };
         let sync = read_json(&paths.sync_state).ok().flatten().unwrap_or_default();
         let gcache = read_json(&paths.gcache).ok().flatten().unwrap_or_default();
         let mut data = Data {
@@ -210,6 +222,8 @@ impl Data {
             calories: Vec::new(),
             weights: Vec::new(),
             settings,
+            body,
+            body_error,
             sync,
             gcache,
             syncing: false,
@@ -221,6 +235,9 @@ impl Data {
         };
         if !data.paths.settings.exists() {
             data.save_settings();
+        }
+        if !data.paths.body.exists() {
+            data.save_body();
         }
         data.reload_all();
         data.daily_backup();
@@ -315,7 +332,7 @@ impl Data {
 
     /// Daily limit × days in the month containing `day`, if a limit is set.
     pub fn month_budget(&self, day: chrono::NaiveDate) -> Option<u32> {
-        let limit = self.settings.daily_calorie_limit;
+        let limit = self.daily_limit();
         (limit > 0).then(|| limit * days_in_month(day))
     }
 
@@ -337,7 +354,7 @@ impl Data {
     /// with nothing logged count as the daily limit: "no food entered", not "ate nothing".
     pub fn month_tally(&self, day: chrono::NaiveDate, today: chrono::NaiveDate) -> MonthTally {
         use chrono::Datelike;
-        let limit = self.settings.daily_calorie_limit;
+        let limit = self.daily_limit();
         let mut t = MonthTally::default();
         for (i, kcal) in self.month_days(day).into_iter().enumerate() {
             let date = day.with_day(i as u32 + 1).unwrap();
@@ -365,7 +382,7 @@ impl Data {
         let budget = self.month_budget(day)? as i64;
         let before = &self.month_days(day)[..day.day0() as usize];
         let days_left = (days_in_month(day) - day.day0()) as i64;
-        Some(spread_budget(budget, counted(before, self.settings.daily_calorie_limit), days_left))
+        Some(spread_budget(budget, counted(before, self.daily_limit()), days_left))
     }
 
     pub fn save_items(&mut self) {
@@ -383,6 +400,51 @@ impl Data {
         if let Err(e) = write_json(&self.paths.settings, &self.settings) {
             self.status = format!("Saving settings failed: {e}");
         }
+    }
+
+    pub fn save_body(&mut self) {
+        if let Some(e) = &self.body_error {
+            self.status = format!("body.json could not be read ({e}). Fix it and restart; changes aren't saved until then.");
+            return;
+        }
+        if let Err(e) = write_json(&self.paths.body, &self.body) {
+            self.status = format!("Saving body.json failed: {e}");
+        }
+    }
+
+    /// Weight the body calculations use: the 7-day average at the latest weigh-in.
+    pub fn current_weight(&self) -> Option<f32> {
+        crate::body::current_weight(&self.weights)
+    }
+
+    /// Profile numbers and today's plan, if the profile is complete and a weight is logged.
+    pub fn body_plan(&self, today: chrono::NaiveDate) -> Option<(crate::body::Numbers, crate::body::Plan)> {
+        let n = self.body.numbers(self.current_weight()?, today)?;
+        let p = self.body.plan(&n, today);
+        Some((n, p))
+    }
+
+    /// The daily calorie limit (0 = none): from the plan when the Body profile is complete,
+    /// otherwise the fallback limit.
+    pub fn daily_limit(&self) -> u32 {
+        match self.body_plan(Local::now().date_naive()) {
+            Some((_, p)) => p.daily,
+            None => self.body.fallback_daily_limit,
+        }
+    }
+
+    /// True when the daily limit comes from the Body plan.
+    pub fn limit_from_plan(&self) -> bool {
+        self.body_plan(Local::now().date_naive()).is_some()
+    }
+
+    /// kcal logged per day.
+    pub fn daily_kcal(&self) -> std::collections::BTreeMap<chrono::NaiveDate, u32> {
+        let mut m = std::collections::BTreeMap::new();
+        for c in &self.calories {
+            *m.entry(c.date).or_insert(0) += c.kcal;
+        }
+        m
     }
 
     pub fn save_sync(&mut self) {

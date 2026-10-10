@@ -25,13 +25,28 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   buttons, and **Describe what you ate** for Claude. Claude deliberately estimates high and
   explains its estimate before you apply it. The calendar shows each day's total. Entries live in
   `calories.json`.
-- **Monthly calorie budget.** Set a daily calorie limit in Settings. The month view shows the
+- **Body tab: profile and goal weight.** Enter sex, birth date, height, activity level and
+  (optionally) body fat %. Morrowkeep works out:
+  - your resting burn (Mifflin-St Jeor, or Katch-McArdle when body fat is known)
+  - your daily burn (resting burn × activity factor), BMI and the healthy weight range for your
+    height
+
+  Set a **goal weight and date** and it works out the daily deficit (≈7700 kcal per kg) and the
+  calories to eat. It warns when the pace is faster than 1% of body weight a week (with a
+  one-click "earliest safe date") and never goes under 1500 kcal (1200 for women). A target at
+  or above your weight means maintenance for that weight. Calculations use your 7-day average
+  weight, so daily water swings don't move the plan. Once you have 2+ weeks of calories and
+  weigh-ins, **measured burn** shows what your own logs say you burn.
+- **Daily calorie limit.** With a complete profile, the limit comes from the Body plan and
+  updates as your weight changes. Otherwise a fallback limit (also on the Body tab) is used.
+- **Monthly calorie budget.** The month view shows the
   month's total against limit × days in the month. Today doesn't show the raw limit. It shows a
   *recommended* amount: what's left of the month's budget spread over the remaining days, so a big
   day lowers the following days. A past day with nothing logged counts as exactly your daily limit
   ("no food entered", not "ate nothing").
-- **Weight.** Enter today's weight on the Today page (one value per day, stored in
-  `weight.json`). It shows the change since your last weigh-in.
+- **Weight.** Enter today's weight on the Habits page (one value per day, stored in
+  `weight.json`). It shows the change since your last weigh-in, and how far you are from your
+  goal.
 - **Streaks** (top of the Charts tab). One row per recurring task, with consecutive completions
   drawn as a streak in a style per kind:
   - workout: a ribbon that thickens
@@ -46,8 +61,11 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   joined, missed ones as grey rings, upcoming ones as faint rings, and a gold star when everything
   was done. Only tasks with a time are listed as text. The day panel shows the day's anytime
   tasks as a vertical constellation (click a star to tick it off).
-- **Charts tab.** A weight line chart and a calories-per-day bar chart (with your daily limit as a
-  dashed line), over Week / Month / 3 months / 6 months / Year. Hover for exact values.
+- **Charts tab.** A weight chart and a calories-per-day bar chart (with your daily limit as a
+  dashed line), over Week / Month / 3 months / 6 months / Year. Hover for exact values. The
+  weight chart shows weigh-ins, the 7-day average and, with a goal, the target line, a star on
+  the target date, the planned path, and where your recent pace leads (dotted). When the
+  target date is within one more period, the charts extend to it.
 - **Reminders.** Windows notifications, also while Morrowkeep is in the tray: unfinished "anytime"
   items for today, no calories logged after 18:00, and no weight logged after 10:00. At most one
   every 60 minutes, with quiet hours (22:00–08:00).
@@ -94,6 +112,7 @@ LLVM (see the comment in `Cargo.toml`).
 | `calories.json` | Calorie log, one entry per food or drink. Daily totals are summed from it. |
 | `weight.json` | Weight log, one entry per day. |
 | `settings.json` | Settings. Editable in the app. |
+| `body.json` | Body profile, goal weight (with earlier goals) and the fallback calorie limit. Editable on the Body tab. |
 | `inbox/` | Drop import `.json` files here. They are moved to `imported/`, or to `failed/` with an `.errors.txt`. |
 | `backups/` | Daily copies of `items.json`, `calories.json` and `weight.json`, keeping 14 days of each. |
 | `models/` | Whisper voice models. |
@@ -147,6 +166,7 @@ understands:
 |---|---|
 | `450 kcal pasta`, `+450`, `kcal 300 snack` | logs calories |
 | `82.4 kg`, `weight 82,4`, `weighed 82.4` | logs today's weight |
+| `goal 76 kg by feb 1`, `target weight 75.5` | sets your goal weight (without a date: 0.5 kg a week) |
 | `done vacuum`, `did push-ups` | ticks off the matching task for today |
 | `ate a chicken burrito`, `I had a banana` | estimates the calories with Claude, then shows them for review |
 | anything else | adds a task (see below) |
@@ -189,9 +209,9 @@ files always list every option. Sections:
 | `surface` | page, dialogs (`window`), cards and tiles (`card`, `card_border`), text fields (`input`), weekend days in the calendar (`weekend`), `shadow` |
 | `text` | `primary`, `muted`, `on_color` (text on filled tiles and chips) |
 | `widget` | buttons (`fill`, `fill_hover`, `fill_active`, `border`, `border_hover`), `selection`, `link` |
-| `status` | `success` (done, all done), `danger` (over budget, errors), `danger_background` |
+| `status` | `success` (done, all done), `danger` (over budget, errors), `warning` (cautions such as a too-fast goal), `danger_background` |
 | `kinds` | one color per task kind; add any custom kind name, and unknown kinds use `other` |
-| `data` | `brand` (logo and name), `today` (today's ring in the calendar), `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line` |
+| `data` | `brand` (logo and name), `today` (today's ring in the calendar), `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line`, `goal` (goal line, star, planned path), `trend` (7-day average and projection) |
 | `sky` | the star field: `star` color (alpha = max brightness) and `density` (0 = off) |
 | `shape` | `card_radius`, `tile_radius`, `widget_radius` |
 | `charts` | `line_fill_alpha` (area under the weight line, 0 = none) and `bar_radius` (rounded bar tops) |
