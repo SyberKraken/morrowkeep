@@ -1,0 +1,502 @@
+//! Local storage. Everything lives as human-readable JSON in one folder
+//! (default: Documents\Morrowkeep, override with the MORROWKEEP_DIR environment variable).
+
+use crate::model::{CalorieEntry, ExtEvent, Item, WeightEntry};
+use chrono::{DateTime, Local};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+pub const IMPORT_FORMAT: &str = include_str!("../IMPORT_FORMAT.md");
+
+#[derive(Clone, Debug)]
+pub struct Paths {
+    pub root: PathBuf,
+    pub items: PathBuf,
+    pub calories: PathBuf,
+    pub weight: PathBuf,
+    pub settings: PathBuf,
+    pub token: PathBuf,
+    pub gcache: PathBuf,
+    pub sync_state: PathBuf,
+    pub inbox: PathBuf,
+    pub backups: PathBuf,
+    pub models: PathBuf,
+}
+
+impl Paths {
+    pub fn resolve() -> Paths {
+        // LIFEHUB_DIR: the project's name before it became Morrowkeep.
+        let root = std::env::var_os("MORROWKEEP_DIR")
+            .or_else(|| std::env::var_os("LIFEHUB_DIR"))
+            .map(PathBuf::from)
+            .or_else(|| dirs::document_dir().map(|d| d.join("Morrowkeep")))
+            .unwrap_or_else(|| PathBuf::from("Morrowkeep"));
+        Paths {
+            items: root.join("items.json"),
+            calories: root.join("calories.json"),
+            weight: root.join("weight.json"),
+            settings: root.join("settings.json"),
+            token: root.join("google_token.json"),
+            gcache: root.join("google_events_cache.json"),
+            sync_state: root.join("sync_state.json"),
+            inbox: root.join("inbox"),
+            backups: root.join("backups"),
+            models: root.join("models"),
+            root,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Settings {
+    /// OAuth "Desktop app" client from Google Cloud Console.
+    pub google_client_id: String,
+    pub google_client_secret: String,
+    /// Calendar that Morrowkeep items are mirrored into (created if missing).
+    pub google_calendar_name: String,
+    /// Calendars whose events are shown read-only ("primary" = your main calendar).
+    pub pull_calendars: Vec<String>,
+    pub auto_sync: bool,
+    pub sync_interval_min: u32,
+    /// Whisper model file name inside the models folder.
+    pub whisper_model: String,
+    /// Daily calorie limit (0 = none). It sets the monthly budget (limit × days in month);
+    /// Today shows a recommended amount that spreads what's left of that budget.
+    #[serde(alias = "calorie_goal")]
+    pub daily_calorie_limit: u32,
+    /// "en", "sv", ... or "auto". Non-English needs a multilingual model (no ".en").
+    pub voice_language: String,
+    pub close_to_tray: bool,
+    /// Periodic Windows notifications.
+    pub reminders_enabled: bool,
+    pub reminder_interval_min: u32,
+    /// Remind about today's unfinished items without a time ("anytime").
+    pub remind_anytime: bool,
+    /// Remind when no calories are logged by `calorie_reminder_after`.
+    pub remind_calories: bool,
+    pub calorie_reminder_after: String,
+    /// Remind when no weight is logged by `weight_reminder_after`.
+    pub remind_weight: bool,
+    pub weight_reminder_after: String,
+    /// No reminders between these times ("HH:MM"; may cross midnight).
+    pub quiet_start: String,
+    pub quiet_end: String,
+    /// Where quick-add text goes: "local" (offline parser) or "claude" (Claude Code CLI).
+    pub input_mode: String,
+    /// Path to claude.exe; empty = find it automatically.
+    pub claude_path: String,
+    /// Model alias passed to Claude Code: haiku, sonnet or opus.
+    pub claude_model: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            google_client_id: String::new(),
+            google_client_secret: String::new(),
+            google_calendar_name: "Morrowkeep".into(),
+            pull_calendars: vec!["primary".into()],
+            auto_sync: true,
+            sync_interval_min: 15,
+            whisper_model: "ggml-base.en.bin".into(),
+            daily_calorie_limit: 0,
+            voice_language: "en".into(),
+            close_to_tray: true,
+            reminders_enabled: true,
+            reminder_interval_min: 60,
+            remind_anytime: true,
+            remind_calories: true,
+            calorie_reminder_after: "18:00".into(),
+            remind_weight: true,
+            weight_reminder_after: "10:00".into(),
+            quiet_start: "22:00".into(),
+            quiet_end: "08:00".into(),
+            input_mode: "local".into(),
+            claude_path: String::new(),
+            claude_model: "sonnet".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncState {
+    pub calendar_id: Option<String>,
+    /// Google event ids of deleted items that still need deleting remotely.
+    pub pending_deletes: Vec<String>,
+    pub last_sync: Option<DateTime<Local>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct WeightFile {
+    #[serde(default)]
+    version: u32,
+    entries: Vec<WeightEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CaloriesFile {
+    #[serde(default)]
+    version: u32,
+    entries: Vec<CalorieEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ItemsFile {
+    #[serde(default)]
+    version: u32,
+    items: Vec<Item>,
+}
+
+/// All app state. Shared between the UI thread and the background worker behind a mutex.
+pub struct Data {
+    pub paths: Paths,
+    pub items: Vec<Item>,
+    pub calories: Vec<CalorieEntry>,
+    /// Sorted by date, at most one per day.
+    pub weights: Vec<WeightEntry>,
+    pub settings: Settings,
+    pub sync: SyncState,
+    pub gcache: Vec<ExtEvent>,
+    pub google_connected: bool,
+    pub syncing: bool,
+    /// Short status line shown in the top bar.
+    pub status: String,
+    /// Set when items.json / calories.json can't be parsed; saving is blocked until it's fixed.
+    pub load_error: Option<String>,
+    items_mtime: Option<SystemTime>,
+    calories_mtime: Option<SystemTime>,
+    weight_mtime: Option<SystemTime>,
+}
+
+impl Data {
+    /// Moves Documents\LifeHub (the app's previous name) to the new data folder, once.
+    fn migrate_old_folder(paths: &Paths) {
+        let Some(old) = dirs::document_dir().map(|d| d.join("LifeHub")) else { return };
+        if !paths.root.exists() && old.join("items.json").exists() {
+            let _ = fs::rename(&old, &paths.root);
+        }
+    }
+
+    pub fn load() -> Data {
+        let paths = Paths::resolve();
+        Self::migrate_old_folder(&paths);
+        for dir in [&paths.root, &paths.inbox, &paths.backups, &paths.models] {
+            let _ = fs::create_dir_all(dir);
+        }
+        let _ = fs::create_dir_all(paths.inbox.join("imported"));
+        let _ = fs::create_dir_all(paths.inbox.join("failed"));
+        // Keep a copy of the import spec next to the data so AI tools / you can find it.
+        let _ = fs::write(paths.root.join("IMPORT_FORMAT.md"), IMPORT_FORMAT);
+
+        let settings = read_json(&paths.settings).ok().flatten().unwrap_or_default();
+        let sync = read_json(&paths.sync_state).ok().flatten().unwrap_or_default();
+        let gcache = read_json(&paths.gcache).ok().flatten().unwrap_or_default();
+        let mut data = Data {
+            google_connected: paths.token.exists(),
+            paths,
+            items: Vec::new(),
+            calories: Vec::new(),
+            weights: Vec::new(),
+            settings,
+            sync,
+            gcache,
+            syncing: false,
+            status: String::new(),
+            load_error: None,
+            items_mtime: None,
+            calories_mtime: None,
+            weight_mtime: None,
+        };
+        if !data.paths.settings.exists() {
+            data.save_settings();
+        }
+        data.reload_all();
+        data.daily_backup();
+        data
+    }
+
+    /// (Re)reads items.json and calories.json from disk.
+    pub fn reload_all(&mut self) {
+        self.items_mtime = mtime(&self.paths.items);
+        self.calories_mtime = mtime(&self.paths.calories);
+        self.weight_mtime = mtime(&self.paths.weight);
+        let mut errors = Vec::new();
+        match read_json::<ItemsFile>(&self.paths.items) {
+            Ok(f) => self.items = f.map(|f| f.items).unwrap_or_default(),
+            Err(e) => errors.push(format!("items.json could not be read: {e}")),
+        }
+        match read_json::<WeightFile>(&self.paths.weight) {
+            Ok(f) => {
+                self.weights = f.map(|f| f.entries).unwrap_or_default();
+                self.weights.sort_by_key(|w| w.date);
+            }
+            Err(e) => errors.push(format!("weight.json could not be read: {e}")),
+        }
+        match read_json::<CaloriesFile>(&self.paths.calories) {
+            Ok(f) => self.calories = f.map(|f| f.entries).unwrap_or_default(),
+            Err(e) => errors.push(format!("calories.json could not be read: {e}")),
+        }
+        self.load_error = (!errors.is_empty()).then(|| {
+            format!(
+                "{}. Fix the file (or restore one from the backups folder) and press Reload. Changes are not saved until then.",
+                errors.join("; ")
+            )
+        });
+    }
+
+    /// True if items.json or calories.json was modified by something other than this app.
+    pub fn files_changed_on_disk(&self) -> bool {
+        let changed = |p: &Path, known: Option<SystemTime>| {
+            let now = mtime(p);
+            now.is_some() && now != known
+        };
+        changed(&self.paths.items, self.items_mtime)
+            || changed(&self.paths.calories, self.calories_mtime)
+            || changed(&self.paths.weight, self.weight_mtime)
+    }
+
+    pub fn save_weight(&mut self) {
+        if self.load_error.is_some() {
+            return;
+        }
+        self.weights.sort_by_key(|w| w.date);
+        let file = WeightFile { version: 1, entries: self.weights.clone() };
+        match write_json(&self.paths.weight, &file) {
+            Ok(()) => self.weight_mtime = mtime(&self.paths.weight),
+            Err(e) => self.status = format!("Saving weight failed: {e}"),
+        }
+    }
+
+    /// Sets (or with `None`, removes) the weight for `date`.
+    pub fn set_weight(&mut self, date: chrono::NaiveDate, kg: Option<f32>) {
+        self.weights.retain(|w| w.date != date);
+        if let Some(kg) = kg {
+            self.weights.push(WeightEntry { date, kg: (kg * 10.0).round() / 10.0 });
+        }
+        self.save_weight();
+    }
+
+    pub fn weight_on(&self, date: chrono::NaiveDate) -> Option<f32> {
+        self.weights.iter().find(|w| w.date == date).map(|w| w.kg)
+    }
+
+    /// Most recent entry strictly before `date`.
+    pub fn weight_before(&self, date: chrono::NaiveDate) -> Option<&WeightEntry> {
+        self.weights.iter().rev().find(|w| w.date < date)
+    }
+
+    pub fn save_calories(&mut self) {
+        if self.load_error.is_some() {
+            return;
+        }
+        self.calories.sort_by_key(|c| (c.date, c.time));
+        let file = CaloriesFile { version: 1, entries: self.calories.clone() };
+        match write_json(&self.paths.calories, &file) {
+            Ok(()) => self.calories_mtime = mtime(&self.paths.calories),
+            Err(e) => self.status = format!("Saving calories failed: {e}"),
+        }
+    }
+
+    pub fn calories_on(&self, day: chrono::NaiveDate) -> u32 {
+        self.calories.iter().filter(|c| c.date == day).map(|c| c.kcal).sum()
+    }
+
+    /// Daily limit × days in the month containing `day`, if a limit is set.
+    pub fn month_budget(&self, day: chrono::NaiveDate) -> Option<u32> {
+        let limit = self.settings.daily_calorie_limit;
+        (limit > 0).then(|| limit * days_in_month(day))
+    }
+
+    /// Logged kcal per day of the month containing `day` (index 0 = the 1st); `None` for
+    /// days with no entries at all.
+    fn month_days(&self, day: chrono::NaiveDate) -> Vec<Option<u32>> {
+        use chrono::Datelike;
+        let mut days = vec![None; days_in_month(day) as usize];
+        for c in &self.calories {
+            if c.date.year() == day.year() && c.date.month() == day.month() {
+                let slot = &mut days[c.date.day0() as usize];
+                *slot = Some(slot.unwrap_or(0) + c.kcal);
+            }
+        }
+        days
+    }
+
+    /// How the month containing `day` counts against its budget, as of `today`. Past days
+    /// with nothing logged count as the daily limit: "no food entered", not "ate nothing".
+    pub fn month_tally(&self, day: chrono::NaiveDate, today: chrono::NaiveDate) -> MonthTally {
+        use chrono::Datelike;
+        let limit = self.settings.daily_calorie_limit;
+        let mut t = MonthTally::default();
+        for (i, kcal) in self.month_days(day).into_iter().enumerate() {
+            let date = day.with_day(i as u32 + 1).unwrap();
+            match kcal {
+                Some(k) => {
+                    t.logged += k;
+                    t.counted += k;
+                }
+                None if date < today && limit > 0 => {
+                    t.unlogged_past_days += 1;
+                    t.counted += limit;
+                }
+                None => {}
+            }
+        }
+        t
+    }
+
+    /// Recommended calories for `day`: what's left of the month's budget after the earlier
+    /// days of the month, spread evenly over the days left (including `day`). Eating too much
+    /// one day lowers the following days. Earlier days with nothing logged count as exactly
+    /// the daily limit. Fixed for the day; it doesn't change as you log food on `day`.
+    pub fn recommended_for(&self, day: chrono::NaiveDate) -> Option<u32> {
+        use chrono::Datelike;
+        let budget = self.month_budget(day)? as i64;
+        let before = &self.month_days(day)[..day.day0() as usize];
+        let days_left = (days_in_month(day) - day.day0()) as i64;
+        Some(spread_budget(budget, counted(before, self.settings.daily_calorie_limit), days_left))
+    }
+
+    pub fn save_items(&mut self) {
+        if self.load_error.is_some() {
+            return;
+        }
+        let file = ItemsFile { version: 1, items: self.items.clone() };
+        match write_json(&self.paths.items, &file) {
+            Ok(()) => self.items_mtime = mtime(&self.paths.items),
+            Err(e) => self.status = format!("Saving failed: {e}"),
+        }
+    }
+
+    pub fn save_settings(&mut self) {
+        if let Err(e) = write_json(&self.paths.settings, &self.settings) {
+            self.status = format!("Saving settings failed: {e}");
+        }
+    }
+
+    pub fn save_sync(&mut self) {
+        let _ = write_json(&self.paths.sync_state, &self.sync);
+        let _ = write_json(&self.paths.gcache, &self.gcache);
+    }
+
+    pub fn item_index(&self, id: &str) -> Option<usize> {
+        self.items.iter().position(|i| i.id == id)
+    }
+
+    pub fn delete_item(&mut self, id: &str) {
+        if let Some(idx) = self.item_index(id) {
+            let item = self.items.remove(idx);
+            if let Some(gid) = item.google_id {
+                self.sync.pending_deletes.push(gid);
+                self.save_sync();
+            }
+        }
+    }
+
+    /// Copies items.json, calories.json and weight.json to backups/<name>-YYYY-MM-DD.json once a day,
+    /// keeping two weeks of each.
+    fn daily_backup(&self) {
+        for (prefix, file) in [("items", &self.paths.items), ("calories", &self.paths.calories), ("weight", &self.paths.weight)] {
+            if !file.exists() {
+                continue;
+            }
+            let target = self.paths.backups.join(format!("{prefix}-{}.json", Local::now().format("%Y-%m-%d")));
+            if !target.exists() {
+                let _ = fs::copy(file, &target);
+            }
+            if let Ok(rd) = fs::read_dir(&self.paths.backups) {
+                let mut files: Vec<PathBuf> = rd
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&format!("{prefix}-"))))
+                    .collect();
+                files.sort();
+                let excess = files.len().saturating_sub(14);
+                for f in files.into_iter().take(excess) {
+                    let _ = fs::remove_file(f);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default, Debug, PartialEq)]
+pub struct MonthTally {
+    /// kcal actually logged this month.
+    pub logged: u32,
+    /// Past days with no entries, counted at the daily limit.
+    pub unlogged_past_days: u32,
+    /// logged + unlogged_past_days × limit: what counts against the budget.
+    pub counted: u32,
+}
+
+/// Sum of days' kcal, counting days with nothing logged as the daily limit.
+pub fn counted(days: &[Option<u32>], limit: u32) -> i64 {
+    days.iter().map(|d| d.unwrap_or(limit) as i64).sum()
+}
+
+/// What's left of a budget, split evenly over the remaining days (never below 0).
+pub fn spread_budget(budget: i64, eaten_before: i64, days_left: i64) -> u32 {
+    ((budget - eaten_before) / days_left.max(1)).max(0) as u32
+}
+
+pub fn days_in_month(day: chrono::NaiveDate) -> u32 {
+    use chrono::Datelike;
+    let first = day.with_day(1).unwrap();
+    let next = if day.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(day.year() + 1, 1, 1)
+    } else {
+        chrono::NaiveDate::from_ymd_opt(day.year(), day.month() + 1, 1)
+    }
+    .unwrap();
+    (next - first).num_days() as u32
+}
+
+fn mtime(p: &Path) -> Option<SystemTime> {
+    fs::metadata(p).and_then(|m| m.modified()).ok()
+}
+
+/// Ok(None) if the file doesn't exist.
+pub fn read_json<T: DeserializeOwned>(p: &Path) -> Result<Option<T>, String> {
+    match fs::read_to_string(p) {
+        // Some editors save UTF-8 with a byte-order mark, which serde_json rejects.
+        Ok(s) => serde_json::from_str(s.trim_start_matches('\u{feff}')).map(Some).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Writes pretty JSON via a temp file + rename so a crash never leaves a half-written file.
+pub fn write_json<T: Serialize>(p: &Path, value: &T) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    let tmp = p.with_extension("json.tmp");
+    fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, p).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overeating_lowers_the_following_days() {
+        // 31-day month, 2000/day limit, nothing logged until the 29th (3000 kcal).
+        // Unlogged days count as 2000, so on the 30th (2 days left): (62000 - 59000) / 2 = 1500.
+        let budget = 2000 * 31;
+        let mut before = vec![None; 28];
+        before.push(Some(3000));
+        assert_eq!(counted(&before, 2000), 59000);
+        assert_eq!(spread_budget(budget, counted(&before, 2000), 2), 1500);
+        // A logged day of 0 kcal is still 0, not the limit.
+        assert_eq!(counted(&[Some(0), None], 2000), 2000);
+        // Way over budget never goes negative.
+        assert_eq!(spread_budget(budget, 70000, 2), 0);
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 10, 10).unwrap();
+        assert_eq!(days_in_month(d), 31);
+        assert_eq!(days_in_month(chrono::NaiveDate::from_ymd_opt(2028, 2, 3).unwrap()), 29);
+        assert_eq!(days_in_month(chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap()), 31);
+    }
+}

@@ -1,0 +1,40 @@
+[package]
+name = "morrowkeep"
+version = "0.1.0"
+edition = "2021"
+description = "Personal planner for tasks, chores, meals and workouts. Local JSON files, Google Calendar mirror."
+
+[features]
+default = ["voice"]
+# Local speech-to-text with whisper.cpp. Build without it: cargo build --release --no-default-features
+voice = ["dep:whisper-rs", "dep:cpal"]
+
+[dependencies]
+eframe = "0.31"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "~1.26", features = ["v4"] }
+dirs = "6"
+ureq = { version = "2", features = ["json"] }
+sha2 = "0.10"
+base64 = "0.22"
+open = "5"
+iana-time-zone = "0.1"
+tray-icon = "0.24"
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security", "Win32_System_ProcessStatus"] }
+whisper-rs = { version = "0.14", optional = true }
+cpal = { version = "0.15", optional = true }
+egui_plot = "0.31"
+windows = { version = "0.62", features = ["Foundation", "Foundation_Collections", "Data_Xml_Dom", "UI_Notifications", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Storage_EnhancedStorage"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# whisper-rs-sys's bundled bindings were generated on Linux (we skip bindgen so LLVM isn't
+# needed). The vendored copy drops the glibc-only FILE layout asserts and types C enums as
+# c_int, which is what MSVC uses and what whisper-rs expects on Windows.
+[patch.crates-io]
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }

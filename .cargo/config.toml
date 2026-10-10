@@ -1,0 +1,9 @@
+# Build settings for the optional `voice` feature (whisper.cpp).
+# [env] values only apply when the variable isn't already set in your environment.
+[env]
+# Use whisper-rs-sys's bundled bindings so libclang isn't required.
+WHISPER_DONT_GENERATE_BINDINGS = "1"
+# CMake ships with the Visual Studio Build Tools; adjust if yours lives elsewhere.
+CMAKE = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
+# That CMake predates VS 2026, so tell it which generator to use.
+CMAKE_GENERATOR = "Visual Studio 17 2022"
