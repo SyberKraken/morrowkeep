@@ -55,23 +55,31 @@ pub struct CalorieInput {
 }
 
 pub fn kind_color(kind: &str) -> Color32 {
-    match kind {
-        "workout" => Color32::from_rgb(46, 160, 103),
-        "meal" => Color32::from_rgb(232, 140, 40),
-        "chore" => Color32::from_rgb(196, 162, 30),
-        "task" => Color32::from_rgb(66, 133, 244),
-        "event" => Color32::from_rgb(0, 150, 170),
-        "habit" => Color32::from_rgb(150, 90, 200),
-        _ => Color32::from_rgb(120, 120, 130),
-    }
+    theme::th().kind(kind)
 }
-pub const GOOGLE_COLOR: Color32 = Color32::from_rgb(128, 128, 140);
-pub const CLAUDE_COLOR: Color32 = Color32::from_rgb(217, 119, 87);
+
+// Colors that identify a kind of data. All come from the current theme (see theme.rs).
+pub fn google_color() -> Color32 {
+    theme::th().data.google
+}
+pub fn claude_color() -> Color32 {
+    theme::th().data.claude
+}
+pub fn calorie_color() -> Color32 {
+    theme::th().data.calories
+}
+pub fn weight_color() -> Color32 {
+    theme::th().data.weight
+}
+/// Muted ink for "nothing logged" notes.
+pub fn not_logged_color() -> Color32 {
+    theme::th().data.not_logged
+}
+pub fn gold_color() -> Color32 {
+    theme::th().data.gold
+}
 /// egui id of the main entry bar.
 const QUICK_ID: &str = "quick_entry";
-pub const CALORIE_COLOR: Color32 = Color32::from_rgb(235, 120, 50);
-/// Muted ink for "nothing logged" notes.
-pub const NOT_LOGGED_COLOR: Color32 = Color32::from_rgb(140, 140, 150);
 
 #[cfg(feature = "voice")]
 enum Voice {
@@ -98,6 +106,8 @@ pub struct App {
     /// calorie card's food box).
     claude_job: Option<(String, mpsc::Receiver<Result<String, String>>, std::time::Instant, bool)>,
     cal_input: CalorieInput,
+    /// Theme version last applied to egui's visuals.
+    theme_version: u64,
     /// Entry bar mode for this session (starts from the default in Settings).
     claude_session: bool,
     chart_period: charts::Period,
@@ -138,6 +148,7 @@ impl App {
             settings: None,
             claude_job: None,
             cal_input: CalorieInput::default(),
+            theme_version: theme::version(),
             claude_session: start_in_claude,
             chart_period: charts::Period::Month,
             board: board::BoardState::default(),
@@ -221,7 +232,7 @@ impl App {
         if let Some(e) = &self.claude_error {
             let mut dismiss = false;
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("⚠ {e}")).color(Color32::from_rgb(220, 80, 60)));
+                ui.label(RichText::new(format!("⚠ {e}")).color(theme::th().status.danger));
                 dismiss = ui.small_button("Dismiss").clicked();
             });
             if dismiss {
@@ -235,16 +246,16 @@ impl App {
         let mut edit = None;
         egui::Frame::default()
             .fill(ui.visuals().faint_bg_color)
-            .stroke(egui::Stroke::new(1.0, CLAUDE_COLOR))
+            .stroke(egui::Stroke::new(1.0, claude_color()))
             .inner_margin(8.0)
             .corner_radius(6.0)
             .show(ui, |ui| {
-                ui.label(RichText::new(format!("Claude · \"{request}\"")).color(CLAUDE_COLOR).strong());
+                ui.label(RichText::new(format!("Claude · \"{request}\"")).color(claude_color()).strong());
                 if let Some(m) = &plan.message {
                     ui.label(RichText::new(m).italics());
                 }
                 for e in &plan.errors {
-                    ui.label(RichText::new(format!("⚠ {e}")).color(Color32::from_rgb(220, 80, 60)));
+                    ui.label(RichText::new(format!("⚠ {e}")).color(theme::th().status.danger));
                 }
                 if plan.errors.is_empty() {
                     egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
@@ -432,7 +443,7 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui, data: &mut Data) {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new("✔ Morrowkeep").font(theme::bold(18.0)).color(Color32::from_rgb(46, 160, 103)));
+            ui.label(RichText::new("✔ Morrowkeep").font(theme::bold(18.0)).color(theme::th().status.success));
             ui.add_space(12.0);
             ui.selectable_value(&mut self.view, View::Today, RichText::new("Habits").size(15.0));
             ui.selectable_value(&mut self.view, View::Calendar, RichText::new("Calendar").size(15.0));
@@ -461,7 +472,7 @@ impl App {
             #[cfg(feature = "voice")]
             self.voice_button(ui, data);
             let claude_mode = self.claude_mode();
-            let (chip, chip_color) = if claude_mode { ("Claude", CLAUDE_COLOR) } else { ("Local", Color32::GRAY) };
+            let (chip, chip_color) = if claude_mode { ("Claude", claude_color()) } else { ("Local", theme::th().text.muted) };
             if ui
                 .add(egui::Button::new(RichText::new(chip).color(chip_color).strong()))
                 .on_hover_text(if claude_mode {
@@ -582,7 +593,7 @@ impl App {
                 let pulse = (ui.input(|i| i.time) * 3.0).sin() * 0.5 + 0.5;
                 let red = Color32::from_rgb(200 + (55.0 * pulse) as u8, 50, 50);
                 if ui
-                    .add(egui::Button::new(RichText::new(format!("■ Stop {secs}s")).color(Color32::WHITE)).fill(red))
+                    .add(egui::Button::new(RichText::new(format!("■ Stop {secs}s")).color(theme::th().text.on_color)).fill(red))
                     .on_hover_text("Stop and transcribe")
                     .clicked()
                     || secs >= 60
@@ -626,6 +637,10 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let shared = self.shared.clone();
         let mut data = shared.lock().unwrap();
+        if theme::version() != self.theme_version {
+            self.theme_version = theme::version();
+            theme::apply_visuals(ctx);
+        }
         // Food typed into a reminder notification: estimate it with Claude, shown for review.
         if let Some(food) = crate::notify::take_pending_food() {
             self.view = View::Today;
@@ -654,12 +669,12 @@ impl eframe::App for App {
             ui.add_space(4.0);
             if let Some(err) = data.load_error.clone() {
                 egui::Frame::default()
-                    .fill(Color32::from_rgb(120, 30, 30))
+                    .fill(theme::th().status.danger_background)
                     .inner_margin(8.0)
                     .corner_radius(4.0)
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(err).color(Color32::WHITE));
+                            ui.label(RichText::new(err).color(theme::th().text.primary));
                             if ui.button("Reload").clicked() {
                                 data.reload_all();
                             }
@@ -725,9 +740,7 @@ impl eframe::App for App {
 
 fn setup_style(ctx: &egui::Context, font: &str) {
     theme::apply_fonts(ctx, font);
-    // Always the night-sky palette (it's what the constellations are designed against).
-    ctx.options_mut(|o| o.theme_preference = egui::ThemePreference::Dark);
-    ctx.set_visuals_of(egui::Theme::Dark, theme::night_visuals());
+    theme::apply_visuals(ctx);
     ctx.all_styles_mut(|style| {
         use egui::{FontFamily, FontId, TextStyle};
         style.text_styles.insert(TextStyle::Body, FontId::new(14.5, FontFamily::Proportional));

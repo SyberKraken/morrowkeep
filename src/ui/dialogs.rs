@@ -9,8 +9,12 @@ use chrono::{Local, NaiveDate, NaiveTime};
 use eframe::egui::{self, Align2, Color32, RichText};
 use std::sync::mpsc::{self, Receiver, Sender};
 
-const ERR: Color32 = Color32::from_rgb(220, 80, 60);
-const OK: Color32 = Color32::from_rgb(46, 160, 103);
+fn err_color() -> Color32 {
+    super::theme::th().status.danger
+}
+fn ok_color() -> Color32 {
+    super::theme::th().status.success
+}
 
 fn modal(title: &str) -> egui::Window<'_> {
     egui::Window::new(title)
@@ -24,11 +28,11 @@ fn modal(title: &str) -> egui::Window<'_> {
 fn hint(ui: &mut egui::Ui, res: Result<Option<String>, String>) {
     match res {
         Ok(Some(s)) => {
-            ui.label(RichText::new(format!("✔ {s}")).size(12.0).color(OK));
+            ui.label(RichText::new(format!("✔ {s}")).size(12.0).color(ok_color()));
         }
         Ok(None) => {}
         Err(e) => {
-            ui.label(RichText::new(format!("⚠ {e}")).size(12.0).color(ERR));
+            ui.label(RichText::new(format!("⚠ {e}")).size(12.0).color(err_color()));
         }
     }
 }
@@ -233,7 +237,7 @@ impl Editor {
             });
 
             if let Some(e) = &self.error {
-                ui.label(RichText::new(e).color(ERR));
+                ui.label(RichText::new(e).color(err_color()));
             }
             ui.separator();
             ui.horizontal(|ui| {
@@ -250,7 +254,7 @@ impl Editor {
                 if let Some(id) = self.id.clone() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.confirm_delete {
-                            if ui.button(RichText::new("Really delete").color(ERR)).clicked() {
+                            if ui.button(RichText::new("Really delete").color(err_color())).clicked() {
                                 data.delete_item(&id);
                                 data.save_items();
                                 keep = false;
@@ -315,7 +319,7 @@ impl ImportDlg {
             if let Some(p) = &plan {
                 egui::ScrollArea::vertical().max_height(180.0).id_salt("import_preview").show(ui, |ui| {
                     for e in &p.errors {
-                        ui.label(RichText::new(format!("⚠ {e}")).color(ERR));
+                        ui.label(RichText::new(format!("⚠ {e}")).color(err_color()));
                     }
                     if p.errors.is_empty() {
                         for op in &p.ops {
@@ -325,7 +329,7 @@ impl ImportDlg {
                 });
             }
             if let Some(r) = &self.result {
-                ui.label(RichText::new(r).color(OK));
+                ui.label(RichText::new(r).color(ok_color()));
             }
             ui.separator();
             ui.horizontal(|ui| {
@@ -397,6 +401,11 @@ impl SettingsDlg {
         if data.settings.font != self.draft.font {
             super::theme::apply_fonts(ctx, &self.draft.font);
         }
+        if data.settings.theme != self.draft.theme {
+            if let Err(e) = super::theme::activate(&data.paths.root, &self.draft.theme) {
+                data.status = format!("Theme error: {e}");
+            }
+        }
         if data.settings != self.draft {
             data.settings = self.draft.clone();
             data.save_settings();
@@ -439,6 +448,24 @@ impl SettingsDlg {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.heading("Appearance");
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    let themes = super::theme::list(&data.paths.root);
+                    let current = themes.iter().find(|(stem, _)| *stem == self.draft.theme).map_or(self.draft.theme.clone(), |(_, n)| n.clone());
+                    egui::ComboBox::from_id_salt("theme").selected_text(current).width(220.0).show_ui(ui, |ui| {
+                        for (stem, name) in &themes {
+                            ui.selectable_value(&mut self.draft.theme, stem.clone(), name);
+                        }
+                    });
+                    if ui.button("📂 Themes folder").on_hover_text("Copy a theme file there to make your own").clicked() {
+                        let _ = open::that(super::theme::themes_dir(&data.paths.root));
+                    }
+                });
+                ui.label(
+                    RichText::new("Themes are JSON files in the themes folder. Copy one, change its colors, and pick it here. Edits to the active theme apply live as you save the file.")
+                        .weak()
+                        .size(12.0),
+                );
                 ui.horizontal(|ui| {
                     ui.label("Font");
                     let current = super::theme::FONTS.iter().find(|(v, _)| *v == self.draft.font).map_or(self.draft.font.as_str(), |(_, l)| *l);
@@ -523,7 +550,7 @@ impl SettingsDlg {
                             self.message = None;
                         }
                         if data.google_connected {
-                            ui.label(RichText::new("● connected").color(OK));
+                            ui.label(RichText::new("● connected").color(ok_color()));
                             if ui.button("Disconnect").clicked() {
                                 let _ = std::fs::remove_file(&data.paths.token);
                                 data.google_connected = false;
@@ -532,7 +559,7 @@ impl SettingsDlg {
                     }
                 });
                 if let Some((m, ok)) = &self.message {
-                    ui.label(RichText::new(m).color(if *ok { OK } else { ERR }));
+                    ui.label(RichText::new(m).color(if *ok { ok_color() } else { err_color() }));
                 }
                 if let Some(t) = data.sync.last_sync {
                     ui.label(RichText::new(format!("Last sync: {}", t.format("%Y-%m-%d %H:%M"))).weak().size(12.0));
@@ -588,7 +615,7 @@ impl SettingsDlg {
                             ui.label(RichText::new("Notifications have Log, Open and Snooze 2h buttons.").weak().size(12.0));
                         });
                         if let Some((m, ok)) = &self.reminder_msg {
-                            ui.label(RichText::new(m).color(if *ok { OK } else { ERR }));
+                            ui.label(RichText::new(m).color(if *ok { ok_color() } else { err_color() }));
                         }
                     });
                 }
@@ -655,7 +682,7 @@ impl SettingsDlg {
             let found = claude::find_cli(&self.draft);
             match &found {
                 Some(p) => ui.label(RichText::new(format!("Using {}", p.display())).weak().size(12.0)),
-                None => ui.label(RichText::new("Claude Code not found. Install it, or point to claude.exe above.").color(ERR).size(12.0)),
+                None => ui.label(RichText::new("Claude Code not found. Install it, or point to claude.exe above.").color(err_color()).size(12.0)),
             };
             ui.horizontal(|ui| {
                 if let Some(rx) = &self.claude_test {
@@ -686,7 +713,7 @@ impl SettingsDlg {
                 }
             });
             if let Some((m, ok)) = &self.claude_msg {
-                ui.label(RichText::new(m).color(if *ok { OK } else { ERR }));
+                ui.label(RichText::new(m).color(if *ok { ok_color() } else { err_color() }));
             }
             egui::CollapsingHeader::new("How do I sign Claude Code in? (one-time)").show(ui, |ui| {
                 for step in [
@@ -734,10 +761,10 @@ impl SettingsDlg {
                 Err(_) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(200)),
             }
         } else if path.exists() {
-            ui.label(RichText::new("✔ model downloaded").color(OK));
+            ui.label(RichText::new("✔ model downloaded").color(ok_color()));
         } else {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Model not downloaded.").color(ERR));
+                ui.label(RichText::new("Model not downloaded.").color(err_color()));
                 if ui.button("Download from Hugging Face").on_hover_text(crate::voice::model_url(&self.draft.whisper_model)).clicked() {
                     let progress = std::sync::Arc::new(std::sync::Mutex::new(0.0f32));
                     let (tx, rx) = mpsc::channel();

@@ -8,8 +8,7 @@
 //! - A constellation in the header lights a star per finished task, plus two fixed stars
 //!   for "calories logged today" and "weight logged today".
 
-use super::charts::WEIGHT_COLOR;
-use super::{kind_color, Action, CALORIE_COLOR, GOOGLE_COLOR};
+use super::{weight_color, kind_color, Action, calorie_color, google_color};
 use crate::model::Item;
 use crate::store::Data;
 use chrono::NaiveDate;
@@ -84,23 +83,23 @@ fn draw_tile(ui: &Ui, rect: Rect, item: &Item, done_now: bool, flip: f32, hovere
         painter.rect_filled(r, radius, color);
     } else {
         // pending: a calm card; the kind color shows in the icon and, on hover, the border
-        let fill = if hovered { super::theme::CARD.lerp_to_gamma(color, 0.10) } else { super::theme::CARD };
+        let fill = if hovered { super::theme::th().surface.card.lerp_to_gamma(color, 0.10) } else { super::theme::th().surface.card };
         painter.rect_filled(r, radius, fill);
-        let border = if hovered { Stroke::new(1.5, color.linear_multiply(0.9)) } else { Stroke::new(1.0, super::theme::CARD_BORDER) };
+        let border = if hovered { Stroke::new(1.5, color.linear_multiply(0.9)) } else { Stroke::new(1.0, super::theme::th().surface.card_border) };
         painter.rect_stroke(r, radius, border, StrokeKind::Inside);
     }
     if sx < 0.35 {
         return; // too thin mid-flip to show content
     }
     let clip = painter.with_clip_rect(r);
-    let ink = if showing_done { Color32::WHITE } else { visuals.text_color() };
+    let ink = if showing_done { super::theme::th().text.on_color } else { visuals.text_color() };
     let pad = 12.0 * k;
     // icon
-    let icon_color = if showing_done { Color32::WHITE } else { color };
+    let icon_color = if showing_done { super::theme::th().text.on_color } else { color };
     clip.text(r.left_top() + Vec2::new(pad, pad - 2.0), Align2::LEFT_TOP, kind_icon(&item.kind), FontId::proportional(24.0 * k), icon_color);
     // checkmark / repeat hint, top-right
     if showing_done {
-        clip.text(r.right_top() + Vec2::new(-pad, pad - 4.0), Align2::RIGHT_TOP, "✔", FontId::proportional(28.0 * k), Color32::WHITE);
+        clip.text(r.right_top() + Vec2::new(-pad, pad - 4.0), Align2::RIGHT_TOP, "✔", FontId::proportional(28.0 * k), super::theme::th().text.on_color);
     } else if item.repeat.is_some() && item.kind != "habit" {
         clip.text(r.right_top() + Vec2::new(-pad, pad), Align2::RIGHT_TOP, "🔁", FontId::proportional(13.0 * k), visuals.weak_text_color());
     }
@@ -151,8 +150,8 @@ fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate) {
     let kcal_logged = data.calories_on(day) > 0;
     let weight_logged = data.weight_on(day).is_some();
     let mut stars = vec![
-        Star { lit: kcal_logged, color: CALORIE_COLOR, label: Some("kcal") },
-        Star { lit: weight_logged, color: WEIGHT_COLOR, label: Some("kg") },
+        Star { lit: kcal_logged, color: calorie_color(), label: Some("kcal") },
+        Star { lit: weight_logged, color: weight_color(), label: Some("kg") },
     ];
     stars.extend(ids.iter().map(|i| {
         let item = &data.items[*i];
@@ -170,7 +169,7 @@ fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate) {
     let right_pad = if all_done { 190.0 } else { 20.0 };
     let step = ((width - 20.0 - right_pad) / n as f32).clamp(22.0, 64.0);
     // faint static sky behind the stars
-    super::theme::star_field(ui.painter(), rect, 0.9);
+    super::theme::star_field(ui.painter(), rect);
     let painter = ui.painter();
     let dim = ui.visuals().weak_text_color().linear_multiply(0.7);
     let cy = rect.center().y - 4.0; // leave room for the tracker labels underneath
@@ -206,7 +205,7 @@ fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate) {
             Align2::LEFT_CENTER,
             "🏆 All done today!",
             FontId::proportional(20.0),
-            Color32::from_rgb(46, 160, 103),
+            super::theme::th().status.success,
         );
     } else if ids.is_empty() {
         painter.text(
@@ -248,7 +247,7 @@ pub fn anytime_board(ui: &mut Ui, data: &Data, day: NaiveDate, ids: &[usize], al
     if !all_day.is_empty() {
         ui.horizontal_wrapped(|ui| {
             for t in all_day {
-                ui.label(RichText::new(format!("📅 {t}")).color(GOOGLE_COLOR));
+                ui.label(RichText::new(format!("📅 {t}")).color(google_color()));
             }
         });
         ui.add_space(4.0);
@@ -345,7 +344,7 @@ pub fn anytime_board(ui: &mut Ui, data: &Data, day: NaiveDate, ids: &[usize], al
             for idx in &tray {
                 let item = &data.items[*idx];
                 let c = kind_color(&item.kind);
-                let chip = egui::Button::new(RichText::new(format!("✔ {}", item.title)).color(Color32::WHITE).size(13.0))
+                let chip = egui::Button::new(RichText::new(format!("✔ {}", item.title)).color(super::theme::th().text.on_color).size(13.0))
                     .fill(c.linear_multiply(0.85))
                     .corner_radius(12.0);
                 if ui.add(chip).on_hover_text("Click to undo").clicked() {

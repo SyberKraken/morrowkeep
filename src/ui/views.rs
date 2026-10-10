@@ -1,8 +1,7 @@
 //! Today view, day list, month grid and week timeline.
 
 use super::board::{anytime_board, BoardState};
-use super::charts::WEIGHT_COLOR;
-use super::{kind_color, schedule_text, Action, CalMode, CalorieInput, CALORIE_COLOR, CLAUDE_COLOR, GOOGLE_COLOR, NOT_LOGGED_COLOR};
+use super::{weight_color, kind_color, schedule_text, Action, CalMode, CalorieInput, calorie_color, claude_color, google_color, not_logged_color};
 use crate::model::occurrences;
 use crate::store::Data;
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, Timelike};
@@ -101,14 +100,14 @@ fn entry_row(ui: &mut Ui, data: &Data, e: Entry, day: NaiveDate, actions: &mut V
                 let time = if ev.all_day { String::new() } else { ev.start.format("%H:%M").to_string() };
                 ui.add_sized([40.0, 18.0], egui::Label::new(RichText::new(time).monospace().weak()));
                 let (r, _) = ui.allocate_exact_size(Vec2::new(4.0, 18.0), Sense::hover());
-                ui.painter().rect_filled(r, 2.0, GOOGLE_COLOR);
+                ui.painter().rect_filled(r, 2.0, google_color());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Google").size(11.5).color(GOOGLE_COLOR));
+                    ui.label(RichText::new("Google").size(11.5).color(google_color()));
                     if !ev.all_day && ui.available_width() > 320.0 {
                         ui.label(RichText::new(format!("{}–{}", ev.start.format("%H:%M"), ev.end.format("%H:%M"))).size(12.0).weak());
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(RichText::new(&ev.title).size(15.0).color(GOOGLE_COLOR)).truncate());
+                        ui.add(egui::Label::new(RichText::new(&ev.title).size(15.0).color(google_color())).truncate());
                     });
                 });
             });
@@ -212,8 +211,8 @@ fn vertical_constellation(ui: &mut Ui, data: &Data, day: NaiveDate, entries: &[E
             Entry::Ext(i) => {
                 // all-day Google event: not a task, shown as a small grey diamond
                 let ev = &data.gcache[i];
-                four_diamond(painter, node, 5.0, GOOGLE_COLOR);
-                painter.text(Pos2::new(rect.left() + x_off + 18.0, rect.center().y), Align2::LEFT_CENTER, &ev.title, FontId::proportional(14.0), GOOGLE_COLOR);
+                four_diamond(painter, node, 5.0, google_color());
+                painter.text(Pos2::new(rect.left() + x_off + 18.0, rect.center().y), Align2::LEFT_CENTER, &ev.title, FontId::proportional(14.0), google_color());
             }
         }
     }
@@ -221,7 +220,7 @@ fn vertical_constellation(ui: &mut Ui, data: &Data, day: NaiveDate, entries: &[E
         let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::hover());
         let node = Pos2::new(rect.left() + x_off, rect.center().y);
         super::streaks::gold_star(ui.painter(), node, 10.0);
-        ui.painter().text(Pos2::new(rect.left() + x_off + 18.0, rect.center().y), Align2::LEFT_CENTER, "All done", FontId::proportional(14.0), super::streaks::GOLD);
+        ui.painter().text(Pos2::new(rect.left() + x_off + 18.0, rect.center().y), Align2::LEFT_CENTER, "All done", FontId::proportional(14.0), super::gold_color());
     }
 }
 
@@ -235,7 +234,7 @@ fn four_diamond(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
 
 fn now_line(ui: &mut Ui) {
     let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 10.0), Sense::hover());
-    let red = Color32::from_rgb(220, 60, 60);
+    let red = super::theme::th().data.now_line;
     ui.painter().line_segment([r.left_center(), r.right_center()], Stroke::new(1.5, red));
     ui.painter().circle_filled(r.left_center(), 4.0, red);
     ui.painter().text(
@@ -253,13 +252,13 @@ fn calorie_list(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Acti
         ui.horizontal(|ui| {
             let time = c.time.map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
             ui.add_sized([40.0, 18.0], egui::Label::new(RichText::new(time).monospace().weak()));
-            ui.add_sized([70.0, 18.0], egui::Label::new(RichText::new(format!("{} kcal", c.kcal)).strong().color(CALORIE_COLOR)));
+            ui.add_sized([70.0, 18.0], egui::Label::new(RichText::new(format!("{} kcal", c.kcal)).strong().color(calorie_color())));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("✖").on_hover_text("Remove this entry").clicked() {
                     actions.push(Action::DeleteCalories(c.id.clone()));
                 }
                 if c.source == "claude" {
-                    ui.label(RichText::new("Claude").size(11.0).color(CLAUDE_COLOR));
+                    ui.label(RichText::new("Claude").size(11.0).color(claude_color()));
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     let what = if c.description.is_empty() { "(no description)" } else { c.description.as_str() };
@@ -278,7 +277,7 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mu
     super::theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(total.to_string()).font(super::theme::bold(46.0)).color(CALORIE_COLOR));
+                ui.label(RichText::new(total.to_string()).font(super::theme::bold(46.0)).color(calorie_color()));
                 ui.vertical(|ui| {
                     ui.add_space(14.0);
                     ui.label(RichText::new("kcal today").size(16.0));
@@ -287,11 +286,11 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mu
             if let Some(rec) = data.recommended_for(today) {
                 let left = rec as i64 - total as i64;
                 let (text, color) = if rec == 0 {
-                    ("This month's budget is used up".to_string(), Color32::from_rgb(220, 80, 60))
+                    ("This month's budget is used up".to_string(), super::theme::th().status.danger)
                 } else if left >= 0 {
-                    (format!("{left} kcal left today"), CALORIE_COLOR)
+                    (format!("{left} kcal left today"), calorie_color())
                 } else {
-                    (format!("{} kcal over today", -left), Color32::from_rgb(220, 80, 60))
+                    (format!("{} kcal over today", -left), super::theme::th().status.danger)
                 };
                 let frac = if rec == 0 { 1.0 } else { (total as f32 / rec as f32).min(1.0) };
                 ui.label(RichText::new(text).size(18.0).strong().color(color));
@@ -352,17 +351,17 @@ fn weight_row(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut 
             match (today_kg, previous) {
                 (Some(k), p) => {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{k:.1} kg")).font(super::theme::bold(28.0)).color(WEIGHT_COLOR));
+                        ui.label(RichText::new(format!("{k:.1} kg")).font(super::theme::bold(28.0)).color(weight_color()));
                         if let Some(p) = p {
                             ui.label(RichText::new(format!("{:+.1} kg since {}", k - p.kg, p.date.format("%b %-d"))).weak());
                         }
                     });
                 }
                 (None, Some(p)) => {
-                    ui.label(RichText::new(format!("Not weighed today · last {:.1} kg on {}", p.kg, p.date.format("%b %-d"))).color(NOT_LOGGED_COLOR));
+                    ui.label(RichText::new(format!("Not weighed today · last {:.1} kg on {}", p.kg, p.date.format("%b %-d"))).color(not_logged_color()));
                 }
                 (None, None) => {
-                    ui.label(RichText::new("Not weighed today").color(NOT_LOGGED_COLOR));
+                    ui.label(RichText::new("Not weighed today").color(not_logged_color()));
                 }
             }
             ui.horizontal(|ui| {
@@ -408,7 +407,7 @@ fn backlog_list(ui: &mut Ui, data: &Data, actions: &mut Vec<Action>) {
                     actions.push(Action::MoveToToday(item.id.clone()));
                 }
                 if let Some(d) = item.date {
-                    ui.label(RichText::new(d.format("%b %-d").to_string()).size(12.0).color(Color32::from_rgb(220, 80, 60)))
+                    ui.label(RichText::new(d.format("%b %-d").to_string()).size(12.0).color(super::theme::th().status.danger))
                         .on_hover_text("Overdue");
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -474,7 +473,7 @@ pub fn day_panel(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Act
             } else {
                 "No food logged".to_string()
             };
-            ui.label(RichText::new(note).italics().color(NOT_LOGGED_COLOR));
+            ui.label(RichText::new(note).italics().color(not_logged_color()));
         }
         day_list(ui, data, day, actions);
     });
@@ -543,7 +542,7 @@ fn month_calorie_bar(ui: &mut Ui, data: &Data, anchor: NaiveDate) {
         match data.month_budget(anchor) {
             Some(budget) => {
                 let over = total > budget;
-                let color = if over { Color32::from_rgb(220, 80, 60) } else { CALORIE_COLOR };
+                let color = if over { super::theme::th().status.danger } else { calorie_color() };
                 ui.label(RichText::new(format!("{month}: {total} / {budget} kcal")).strong().color(color));
                 ui.add(
                     egui::ProgressBar::new((total as f32 / budget as f32).min(1.0))
@@ -573,7 +572,7 @@ fn month_calorie_bar(ui: &mut Ui, data: &Data, anchor: NaiveDate) {
                 }
             }
             None => {
-                ui.label(RichText::new(format!("{month}: {total} kcal")).strong().color(CALORIE_COLOR));
+                ui.label(RichText::new(format!("{month}: {total} kcal")).strong().color(calorie_color()));
                 ui.label(RichText::new("Set a daily calorie limit in Settings to get a monthly budget").weak().size(12.0));
             }
         }
@@ -599,7 +598,7 @@ pub fn month(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, a
     for ev in &data.gcache {
         let d = ev.start.date();
         if !ev.all_day && d >= grid_start && d <= grid_end {
-            by_day.entry(d).or_default().push((Some(ev.start.time()), ev.title.clone(), GOOGLE_COLOR, false));
+            by_day.entry(d).or_default().push((Some(ev.start.time()), ev.title.clone(), google_color(), false));
         }
     }
     for v in by_day.values_mut() {
@@ -644,15 +643,15 @@ pub fn month(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, a
         };
         painter.rect_filled(cell, 5.0, bg);
         if day == today {
-            painter.rect_stroke(cell, 5.0, Stroke::new(2.0, Color32::from_rgb(46, 160, 103)), StrokeKind::Inside);
+            painter.rect_stroke(cell, 5.0, Stroke::new(2.0, super::theme::th().status.success), StrokeKind::Inside);
         }
         let num_color = if in_month { visuals.text_color() } else { visuals.weak_text_color() };
         painter.text(cell.left_top() + Vec2::new(6.0, 4.0), Align2::LEFT_TOP, day.day().to_string(), FontId::proportional(13.0), num_color);
         let kcal = data.calories_on(day);
         if kcal > 0 {
-            painter.text(cell.right_top() + Vec2::new(-6.0, 5.0), Align2::RIGHT_TOP, format!("{kcal} kcal"), FontId::proportional(11.5), CALORIE_COLOR);
+            painter.text(cell.right_top() + Vec2::new(-6.0, 5.0), Align2::RIGHT_TOP, format!("{kcal} kcal"), FontId::proportional(11.5), calorie_color());
         } else if day < today {
-            painter.text(cell.right_top() + Vec2::new(-6.0, 5.0), Align2::RIGHT_TOP, "not logged", FontId::proportional(11.0), NOT_LOGGED_COLOR);
+            painter.text(cell.right_top() + Vec2::new(-6.0, 5.0), Align2::RIGHT_TOP, "not logged", FontId::proportional(11.0), not_logged_color());
         }
 
         // Timed tasks as text (at most 2 lines), then the day's constellation fills the rest.
@@ -736,11 +735,11 @@ pub fn week(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, sc
                 continue;
             }
             if ev.all_day {
-                allday[col].push((ev.title.clone(), GOOGLE_COLOR, None, false));
+                allday[col].push((ev.title.clone(), google_color(), None, false));
             } else {
                 let s = if ev.start.date() < d { 0.0 } else { (ev.start.hour() * 60 + ev.start.minute()) as f32 };
                 let e = if ev.end.date() > d { 24.0 * 60.0 } else { (ev.end.hour() * 60 + ev.end.minute()) as f32 };
-                timed[col].push(Block { start: s, end: e.max(s + 20.0), title: ev.title.clone(), color: GOOGLE_COLOR, done: false, item_id: None });
+                timed[col].push(Block { start: s, end: e.max(s + 20.0), title: ev.title.clone(), color: google_color(), done: false, item_id: None });
             }
         }
     }
@@ -759,13 +758,13 @@ pub fn week(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, sc
         if d == selected {
             painter.rect_filled(hr, 4.0, visuals.selection.bg_fill.linear_multiply(0.35));
         }
-        let color = if d == today { Color32::from_rgb(46, 160, 103) } else { visuals.text_color() };
+        let color = if d == today { super::theme::th().status.success } else { visuals.text_color() };
         painter.text(hr.center_top() + Vec2::new(0.0, 11.0), Align2::CENTER_CENTER, d.format("%a %-d").to_string(), FontId::proportional(13.5), color);
         let kcal = data.calories_on(d);
         if kcal > 0 {
-            painter.text(hr.center_top() + Vec2::new(0.0, 28.0), Align2::CENTER_CENTER, format!("{kcal} kcal"), FontId::proportional(11.0), CALORIE_COLOR);
+            painter.text(hr.center_top() + Vec2::new(0.0, 28.0), Align2::CENTER_CENTER, format!("{kcal} kcal"), FontId::proportional(11.0), calorie_color());
         } else if d < today {
-            painter.text(hr.center_top() + Vec2::new(0.0, 28.0), Align2::CENTER_CENTER, "not logged", FontId::proportional(10.5), NOT_LOGGED_COLOR);
+            painter.text(hr.center_top() + Vec2::new(0.0, 28.0), Align2::CENTER_CENTER, "not logged", FontId::proportional(10.5), not_logged_color());
         }
         if resp.clicked() {
             actions.push(Action::SelectDay(d));
@@ -773,8 +772,8 @@ pub fn week(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, sc
         for (k, (title, c, id, done)) in allday[col].iter().enumerate() {
             let r = Rect::from_min_size(Pos2::new(x + 2.0, head.top() + DAY_H + 2.0 + k as f32 * 19.0), Vec2::new(col_w - 4.0, 17.0));
             painter.rect_filled(r, 3.0, c.linear_multiply(if *done { 0.25 } else { 0.55 }));
-            let g = one_line(&painter, title.clone(), 12.0, Color32::WHITE, r.width() - 8.0);
-            painter.galley(r.left_top() + Vec2::new(4.0, 1.5), g, Color32::WHITE);
+            let g = one_line(&painter, title.clone(), 12.0, super::theme::th().text.on_color, r.width() - 8.0);
+            painter.galley(r.left_top() + Vec2::new(4.0, 1.5), g, super::theme::th().text.on_color);
             if let Some(id) = id {
                 if ui.interact(r, Id::new(("allday", id, d)), Sense::click()).clicked() {
                     actions.push(Action::Edit(id.clone()));
@@ -846,12 +845,12 @@ pub fn week(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, sc
                 let h = (b.start / 60.0) as u32;
                 let m = (b.start % 60.0) as u32;
                 let label = format!("{h:02}:{m:02} {}", b.title);
-                let mut job = LayoutJob::single_section(label, TextFormat::simple(FontId::proportional(12.0), Color32::WHITE));
+                let mut job = LayoutJob::single_section(label, TextFormat::simple(FontId::proportional(12.0), super::theme::th().text.on_color));
                 job.wrap.max_width = (r.width() - 6.0).max(1.0);
                 job.wrap.max_rows = ((r.height() - 2.0) / 15.0).floor().max(1.0) as usize;
                 job.wrap.overflow_character = Some('…');
                 let g = clip.layout_job(job);
-                clip.galley(r.left_top() + Vec2::new(4.0, 2.0), g, Color32::WHITE);
+                clip.galley(r.left_top() + Vec2::new(4.0, 2.0), g, super::theme::th().text.on_color);
                 if let (Some(resp), Some(id)) = (resp, &b.item_id) {
                     if resp.clicked() {
                         actions.push(Action::Edit(id.clone()));
@@ -866,7 +865,7 @@ pub fn week(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, sc
             let col = (today - ws).num_days() as f32;
             let y = grid.top() + (now.hour() * 60 + now.minute()) as f32 / 60.0 * HOUR_H;
             let x0 = grid.left() + GUTTER + col * col_w;
-            let red = Color32::from_rgb(220, 60, 60);
+            let red = super::theme::th().data.now_line;
             painter.line_segment([Pos2::new(x0, y), Pos2::new(x0 + col_w, y)], Stroke::new(2.0, red));
             painter.circle_filled(Pos2::new(x0, y), 4.0, red);
         }

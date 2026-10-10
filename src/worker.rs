@@ -27,6 +27,10 @@ pub fn spawn(shared: Arc<Mutex<Data>>, ui: UiHandle, jobs: Receiver<Job>) {
         // First reminder check a couple of minutes after startup, then once a minute.
         let mut next_reminder_check = Instant::now() + Duration::from_secs(120);
         let mut last_reminder: Option<Instant> = None;
+        let theme_mtime = |d: &Data| {
+            std::fs::metadata(crate::ui::theme::theme_path(&d.paths.root, &d.settings.theme)).and_then(|m| m.modified()).ok()
+        };
+        let mut theme_seen = (String::new(), None);
         loop {
             let mut sync_requested = false;
             match jobs.recv_timeout(Duration::from_secs(3)) {
@@ -41,6 +45,19 @@ pub fn spawn(shared: Arc<Mutex<Data>>, ui: UiHandle, jobs: Receiver<Job>) {
                 if d.files_changed_on_disk() {
                     d.reload_all();
                     d.status = "Reloaded data files (changed on disk)".into();
+                    changed = true;
+                }
+                // live theme editing: re-activate when the theme file (or the choice) changes
+                let now_theme = (d.settings.theme.clone(), theme_mtime(&d));
+                if theme_seen.0.is_empty() {
+                    theme_seen = now_theme;
+                } else if now_theme != theme_seen {
+                    theme_seen = now_theme;
+                    let (root, name) = (d.paths.root.clone(), d.settings.theme.clone());
+                    d.status = match crate::ui::theme::activate(&root, &name) {
+                        Ok(()) => format!("Theme \"{name}\" loaded"),
+                        Err(e) => format!("Theme error: {e}"),
+                    };
                     changed = true;
                 }
                 if let Some(msg) = import::process_inbox(&mut d) {

@@ -58,8 +58,8 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
     Settings > Reminders.
   - Morrowkeep keeps its Start menu shortcut tagged with its notification ID. Windows needs that to
     show the notifications in the notification panel.
-- **Look and feel.** A night-sky theme with the Inter font. You can switch to Nunito, Segoe UI
-  or egui's built-in font under Settings > Appearance.
+- **Look and feel.** A night-sky theme with the Inter font. Themes and fonts can be switched
+  under Settings > Appearance (see [Themes](#themes)).
 - **Lightweight.** A single 9 MB native exe with no browser engine. With the window open it uses
   about 80 MB of RAM and 0% CPU when idle. Closing the window tears down the window and GPU
   context, leaving only the tray and a background worker at about 5–12 MB. Measured on Windows 11
@@ -165,6 +165,30 @@ goes to Claude, which can plan, log food, record weight and tick off tasks.
 
 Anything else becomes the title. Without a date, the item goes on today (or on the selected day
 in Calendar view).
+
+## Themes
+
+Every color comes from a theme: a JSON file in `Documents\Morrowkeep	hemes\`. Night sky (the
+default) and Daylight are created there on first start. To make your own:
+
+1. Copy a theme file (e.g. `night-sky.json` → `mine.json`).
+2. Change its `name` and any colors (`"#RRGGBB"` or `"#RRGGBBAA"`).
+3. Pick it in Settings > Appearance.
+
+While a theme is active, saving its file applies the changes live. A theme file only needs the
+keys it changes; anything missing falls back to Night sky. Sections:
+
+| section | what it colors |
+|---|---|
+| `dark` | `true` for a dark theme, `false` for a light one |
+| `surface` | page, dialogs (`window`), cards and tiles (`card`, `card_border`), text fields (`input`), `shadow` |
+| `text` | `primary`, `muted`, `on_color` (text on filled tiles and chips) |
+| `widget` | buttons (`fill`, `fill_hover`, `fill_active`, `border`, `border_hover`), `selection`, `link` |
+| `status` | `success` (done, all done), `danger` (over budget, errors), `danger_background` |
+| `kinds` | one color per task kind; add any custom kind name, and unknown kinds use `other` |
+| `data` | `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line` |
+| `sky` | the star field: `star` color (alpha = max brightness) and `density` (0 = off) |
+| `shape` | `card_radius`, `tile_radius`, `widget_radius` |
 
 ## Shortcuts
 

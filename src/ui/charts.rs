@@ -1,13 +1,12 @@
 //! Charts tab: weight history (line) and calories per day (bars) over a chosen period.
 //! Two separate charts on a shared date axis; never one chart with two y-scales.
 
-use super::{CALORIE_COLOR, NOT_LOGGED_COLOR};
+use super::{weight_color, calorie_color, not_logged_color};
 use crate::store::Data;
 use chrono::{Datelike, Duration, Local, NaiveDate};
-use eframe::egui::{self, Color32, RichText, Ui};
+use eframe::egui::{self, RichText, Ui};
 use egui_plot::{Bar, BarChart, GridInput, GridMark, HLine, Line, LineStyle, Plot, PlotPoints, Points};
 
-pub const WEIGHT_COLOR: Color32 = Color32::from_rgb(70, 140, 230);
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Period {
@@ -157,7 +156,7 @@ fn weight_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, height
         }
     });
     if pts.is_empty() {
-        ui.label(RichText::new("No weight logged in this period. Enter it on the Today page.").color(NOT_LOGGED_COLOR));
+        ui.label(RichText::new("No weight logged in this period. Enter it on the Today page.").color(not_logged_color()));
         return;
     }
     let lo = pts.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
@@ -173,10 +172,10 @@ fn weight_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, height
             None => String::new(),
         })
         .show(ui, |plot| {
-            plot.line(Line::new(PlotPoints::new(pts.clone())).color(WEIGHT_COLOR).width(2.0).name("Weight"));
+            plot.line(Line::new(PlotPoints::new(pts.clone())).color(weight_color()).width(2.0).name("Weight"));
             // markers only while they stay readable
             if n <= 120 {
-                plot.points(Points::new(PlotPoints::new(pts)).color(WEIGHT_COLOR).radius(3.5).name("Weight"));
+                plot.points(Points::new(PlotPoints::new(pts)).color(weight_color()).radius(3.5).name("Weight"));
             }
         });
 }
@@ -214,7 +213,7 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
         }
     });
     if daily.is_empty() {
-        ui.label(RichText::new("No calories logged in this period.").color(NOT_LOGGED_COLOR));
+        ui.label(RichText::new("No calories logged in this period.").color(not_logged_color()));
         return;
     }
     let max = daily.iter().map(|(_, k)| *k).max().unwrap_or(0).max(limit);
@@ -224,7 +223,7 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
         .map(|(d, k)| {
             Bar::new(x(*d), *k as f64)
                 .width(bar_w)
-                .fill(CALORIE_COLOR)
+                .fill(calorie_color())
                 .stroke(egui::Stroke::NONE)
                 .name(d.format("%a %b %-d").to_string())
         })
@@ -238,13 +237,13 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
         .show(ui, |plot| {
             plot.bar_chart(
                 BarChart::new(bars)
-                    .color(CALORIE_COLOR)
+                    .color(calorie_color())
                     .element_formatter(Box::new(|bar, _| format!("{}\n{:.0} kcal", bar.name, bar.value))),
             );
             if limit > 0 {
                 plot.hline(
                     HLine::new(limit as f64)
-                        .color(Color32::from_gray(150))
+                        .color(super::theme::th().data.chart_limit_line)
                         .width(1.5)
                         .style(LineStyle::Dashed { length: 8.0 })
                         .name(format!("Daily limit ({limit})")),

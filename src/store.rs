@@ -72,6 +72,8 @@ pub struct Settings {
     pub close_to_tray: bool,
     /// UI font: "inter" (default), "nunito", "segoe" or "egui".
     pub font: String,
+    /// Theme file (stem) in the themes folder, e.g. "night-sky".
+    pub theme: String,
     /// Periodic Windows notifications.
     pub reminders_enabled: bool,
     pub reminder_interval_min: u32,
@@ -110,6 +112,7 @@ impl Default for Settings {
             voice_language: "en".into(),
             close_to_tray: true,
             font: "inter".into(),
+            theme: "night-sky".into(),
             reminders_enabled: true,
             reminder_interval_min: 60,
             remind_anytime: true,

@@ -16,7 +16,7 @@
 //! One-off tasks get a final row of small stars on the day they were finished.
 //! [`day_stars`] draws the same vocabulary small, for calendar month cells.
 
-use super::{kind_color, NOT_LOGGED_COLOR};
+use super::{kind_color, not_logged_color};
 use crate::model::{occurrences, Item};
 use crate::store::Data;
 use chrono::{Duration, Local, NaiveDate};
@@ -29,7 +29,6 @@ const ROW_H: f32 = 46.0;
 const LABEL_W: f32 = 190.0;
 /// Narrowest spacing between days; longer periods are trimmed to fit.
 const MIN_STEP: f32 = 13.0;
-pub const GOLD: Color32 = Color32::from_rgb(232, 182, 48);
 
 #[derive(Clone, Copy, PartialEq)]
 enum State {
@@ -312,7 +311,7 @@ pub fn streaks_section(ui: &mut Ui, data: &Data, period_days: i64) {
     );
     ui.add_space(4.0);
     if recurring.is_empty() && data.items.iter().all(|i| i.completed_on().is_none_or(|d| d < from)) {
-        ui.label(RichText::new("No recurring tasks yet. Give a task a repeat rule (e.g. \"daily\") to start a streak.").color(NOT_LOGGED_COLOR));
+        ui.label(RichText::new("No recurring tasks yet. Give a task a repeat rule (e.g. \"daily\") to start a streak.").color(not_logged_color()));
         return;
     }
 
@@ -499,14 +498,14 @@ pub fn day_stars(p: &Painter, area: Rect, data: &Data, day: NaiveDate, today: Na
     }
     if all_done {
         let last = pts[n - 1];
-        four_point_star(p, Pos2::new(last.x + step * 1.2, last.y), r * 2.0, GOLD);
+        four_point_star(p, Pos2::new(last.x + step * 1.2, last.y), r * 2.0, super::gold_color());
     }
 }
 
 /// The gold "everything done" star.
 pub fn gold_star(p: &Painter, c: Pos2, r: f32) {
-    p.circle_filled(c, r * 1.3, with_alpha(GOLD, 0.18));
-    four_point_star(p, c, r, GOLD);
+    p.circle_filled(c, r * 1.3, with_alpha(super::gold_color(), 0.18));
+    four_point_star(p, c, r, super::gold_color());
 }
 
 #[cfg(test)]

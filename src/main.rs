@@ -29,6 +29,15 @@ fn main() {
     shortcut::set_process_app_id();
     let shared = Arc::new(Mutex::new(store::Data::load()));
     {
+        // Themes live as editable JSON in <data>\themes; activate the chosen one.
+        let mut d = shared.lock().unwrap();
+        ui::theme::install_builtins(&d.paths.root);
+        let (root, name) = (d.paths.root.clone(), d.settings.theme.clone());
+        if let Err(e) = ui::theme::activate(&root, &name) {
+            d.status = format!("Theme not loaded, using the default: {e}");
+        }
+    }
+    {
         let paths = shared.lock().unwrap().paths.clone();
         notify::register(&paths);
         // Keep the Start menu shortcut pointing at this build, carrying the app ID that
