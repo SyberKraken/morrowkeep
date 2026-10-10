@@ -48,7 +48,8 @@ to the user, e.g. to mention an assumption you made.
 | `until` | no | `YYYY-MM-DD`, last day a repeating item can happen. |
 | `notes` | no | Free text. Use `\n` for new lines (e.g. a recipe or an exercise list). |
 | `tags` | no | Array of strings. |
-| `done` | no | `true` / `false` (non-repeating items). |
+| `done` | no | `true` / `false`. On a repeating item it marks one occurrence: today's, or the day in `done_date`. To tick off a task the user says they did, send its `id` with `"done": true`. |
+| `done_date` | no | `YYYY-MM-DD`: which occurrence `done` applies to (repeating items). Default today. |
 | `sync_google` | no | `false` to keep the item out of Google Calendar. Default `true`. |
 | `id` | no | Only to **update** an existing item: copy its id from the context Morrowkeep gave you. Fields you leave out keep their current values. To clear a field, set it to `null`. |
 

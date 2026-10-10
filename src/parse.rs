@@ -413,6 +413,103 @@ pub fn parse_quick(input: &str, today: NaiveDate) -> Parsed {
     p
 }
 
+/// Non-task things the quick-add bar understands (Local mode).
+#[derive(Debug, PartialEq)]
+pub enum Command {
+    /// "450 kcal pasta", "+450", "kcal 300 snack"
+    Calories { kcal: u32, what: String },
+    /// "82.4 kg", "weight 82,4", "weighed 82.4"
+    Weight(f32),
+    /// "done vacuum", "did push-ups": tick off a matching task for today
+    Done(String),
+    /// "ate a chicken burrito": food without a number, for a Claude estimate
+    Food(String),
+}
+
+fn number(s: &str) -> Option<f32> {
+    s.replace(',', ".").parse::<f32>().ok().filter(|n| n.is_finite())
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Recognizes calorie, weight, "done" and food entries; None means it's a task.
+pub fn parse_command(input: &str) -> Option<Command> {
+    let text = input.trim();
+    let lower = text.to_lowercase();
+    let toks: Vec<&str> = lower.split_whitespace().collect();
+    let raw: Vec<&str> = text.split_whitespace().collect();
+    if toks.is_empty() {
+        return None;
+    }
+    let rest_after = |n: usize| raw.get(n..).map(|r| r.join(" ")).unwrap_or_default();
+
+    // done / did <task>
+    if matches!(toks[0], "done" | "did" | "finished" | "completed") && toks.len() > 1 {
+        return Some(Command::Done(rest_after(1)));
+    }
+    // weight
+    if matches!(toks[0], "weight" | "weigh" | "weighed" | "weighing" | "vikt") {
+        if let Some(kg) = toks.get(1).map(|t| t.trim_end_matches("kg")).and_then(number) {
+            return Some(Command::Weight(kg));
+        }
+    }
+    for (i, t) in toks.iter().enumerate() {
+        // "82.4kg" or "82.4 kg"
+        let kg = if let Some(n) = t.strip_suffix("kg").filter(|n| !n.is_empty()) {
+            number(n)
+        } else if toks.get(i + 1) == Some(&"kg") {
+            number(t)
+        } else {
+            None
+        };
+        if let Some(kg) = kg.filter(|k| (20.0..=400.0).contains(k)) {
+            return Some(Command::Weight(kg));
+        }
+    }
+    // calories: "+450", "450 kcal", "450kcal", "kcal 450", "450 calories"
+    let is_kcal_word = |w: &str| matches!(w, "kcal" | "cal" | "cals" | "calories" | "kalorier");
+    if let Some(n) = toks[0].strip_prefix('+').and_then(|n| n.parse::<u32>().ok()) {
+        let skip = if toks.get(1).is_some_and(|w| is_kcal_word(w)) { 2 } else { 1 };
+        return Some(Command::Calories { kcal: n, what: rest_after(skip) });
+    }
+    if is_kcal_word(toks[0]) {
+        if let Some(n) = toks.get(1).and_then(|n| n.parse::<u32>().ok()) {
+            return Some(Command::Calories { kcal: n, what: rest_after(2) });
+        }
+    }
+    for (i, t) in toks.iter().enumerate() {
+        let kcal = if let Some(n) = t.strip_suffix("kcal").filter(|n| !n.is_empty()) {
+            n.parse::<u32>().ok()
+        } else if toks.get(i + 1).is_some_and(|w| is_kcal_word(w)) {
+            t.parse::<u32>().ok()
+        } else {
+            None
+        };
+        if let Some(kcal) = kcal.filter(|k| (1..=20000).contains(k)) {
+            // description = everything except the number and its unit
+            let skip_unit = !t.ends_with("kcal");
+            let what: Vec<&str> = raw
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i && !(skip_unit && *j == i + 1))
+                .map(|(_, w)| *w)
+                .collect();
+            return Some(Command::Calories { kcal, what: capitalize(&what.join(" ")) });
+        }
+    }
+    // food without a number: "ate ...", "had ... for lunch", "eaten ..."
+    if matches!(toks[0], "ate" | "eaten" | "had" | "drank" | "åt") && toks.len() > 1 {
+        return Some(Command::Food(rest_after(1)));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +573,21 @@ mod tests {
         assert_eq!(parse_date("+3d", today()), NaiveDate::from_ymd_opt(2026, 10, 13));
         assert_eq!(parse_time("6:30 pm"), t(18, 30));
         assert_eq!(parse_duration("1h30m"), Some(90));
+    }
+
+    #[test]
+    fn commands() {
+        assert_eq!(parse_command("450 kcal pasta with pesto"), Some(Command::Calories { kcal: 450, what: "Pasta with pesto".into() }));
+        assert_eq!(parse_command("+300"), Some(Command::Calories { kcal: 300, what: String::new() }));
+        assert_eq!(parse_command("kcal 250 apple"), Some(Command::Calories { kcal: 250, what: "apple".into() }));
+        assert_eq!(parse_command("snack 180kcal"), Some(Command::Calories { kcal: 180, what: "Snack".into() }));
+        assert_eq!(parse_command("82,4 kg"), Some(Command::Weight(82.4)));
+        assert_eq!(parse_command("weight 81.9"), Some(Command::Weight(81.9)));
+        assert_eq!(parse_command("done vacuum"), Some(Command::Done("vacuum".into())));
+        assert_eq!(parse_command("ate a chicken burrito"), Some(Command::Food("a chicken burrito".into())));
+        // ordinary tasks are not commands
+        assert_eq!(parse_command("gym tomorrow 6pm"), None);
+        assert_eq!(parse_command("buy 2 kg of potatoes"), None); // 2 kg isn't a body weight
+        assert_eq!(parse_command("read 20 pages"), None);
     }
 }

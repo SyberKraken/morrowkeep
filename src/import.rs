@@ -271,6 +271,9 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate) -> 
 
     // Each closure-free block: missing key = keep, null = clear, otherwise validate.
     let mut end_time = None;
+    // applied after all fields, once we know whether the item repeats
+    let mut done_flag: Option<bool> = None;
+    let mut done_date: Option<NaiveDate> = None;
     for (key, val) in o {
         let null = val.is_null();
         let s = val.as_str().map(str::trim);
@@ -346,8 +349,12 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate) -> 
                 _ => errs.push("\"tags\" must be an array of strings".into()),
             },
             "done" => match val.as_bool() {
-                Some(b) => item.set_done(b),
+                Some(b) => done_flag = Some(b),
                 None => errs.push("\"done\" must be true or false".into()),
+            },
+            "done_date" => match s.and_then(|d| parse_date(d, today)) {
+                Some(d) => done_date = Some(d),
+                None => errs.push("\"done_date\": use YYYY-MM-DD".into()),
             },
             "sync_google" => match val.as_bool() {
                 Some(b) => item.sync_google = b,
@@ -362,6 +369,17 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate) -> 
             item.duration_min = Some(mins as u32);
         } else {
             errs.push("\"end\" must be after \"time\"".into());
+        }
+    }
+    if let Some(done) = done_flag {
+        if item.repeat.is_some() {
+            // repeating items are done per occurrence: today unless done_date says otherwise
+            let day = done_date.unwrap_or(today);
+            if item.is_done_on(day) != done {
+                item.toggle_done(day);
+            }
+        } else {
+            item.set_done(done);
         }
     }
     if item.title.is_empty() {

@@ -8,13 +8,13 @@ mod views;
 
 use crate::model::{Item, Repeat};
 use crate::{claude, import};
-use crate::parse::parse_quick;
+use crate::parse::{parse_command, parse_quick, Command};
 use crate::store::Data;
 use crate::tray;
 use crate::worker::{Job, UiHandle};
 use chrono::{Local, NaiveDate, NaiveTime};
 use dialogs::{Editor, ImportDlg, SettingsDlg};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32, Id, RichText};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -69,6 +69,8 @@ pub fn kind_color(kind: &str) -> Color32 {
 }
 pub const GOOGLE_COLOR: Color32 = Color32::from_rgb(128, 128, 140);
 pub const CLAUDE_COLOR: Color32 = Color32::from_rgb(217, 119, 87);
+/// egui id of the main entry bar.
+const QUICK_ID: &str = "quick_entry";
 pub const CALORIE_COLOR: Color32 = Color32::from_rgb(235, 120, 50);
 /// Muted ink for "nothing logged" notes.
 pub const NOT_LOGGED_COLOR: Color32 = Color32::from_rgb(140, 140, 150);
@@ -301,12 +303,75 @@ impl App {
         }
     }
 
-    fn quick_add(&mut self, data: &mut Data) {
-        let text = self.quick.trim();
+    /// Today's task best matching `query` for "done …": exact title, then title containing the
+    /// words, among today's occurrences first, then any undone one-off.
+    fn find_task(data: &Data, query: &str) -> Option<usize> {
+        let today = Local::now().date_naive();
+        let q = query.trim().to_lowercase();
+        let todays: Vec<usize> = crate::model::occurrences(&data.items, today, today).into_iter().map(|(_, i)| i).collect();
+        let others: Vec<usize> = (0..data.items.len()).filter(|i| data.items[*i].repeat.is_none() && !data.items[*i].done).collect();
+        let matches = |i: &usize, exact: bool| {
+            let t = data.items[*i].title.to_lowercase();
+            if exact {
+                t == q
+            } else {
+                q.split_whitespace().all(|w| t.contains(w))
+            }
+        };
+        for exact in [true, false] {
+            if let Some(i) = todays.iter().find(|i| matches(i, exact) && !data.items[**i].is_done_on(today)) {
+                return Some(*i);
+            }
+            if let Some(i) = others.iter().find(|i| matches(i, exact)) {
+                return Some(*i);
+            }
+        }
+        None
+    }
+
+    /// Calories, weight, "done …" and food entries typed into the bar (Local mode).
+    /// Returns true if the text was one of those rather than a task.
+    fn run_command(&mut self, data: &mut Data, ctx: &egui::Context, text: &str) -> bool {
+        let Some(cmd) = parse_command(text) else { return false };
+        let today = Local::now().date_naive();
+        match cmd {
+            Command::Calories { kcal, what } => self.apply(data, ctx, Action::AddCalories(kcal, what)),
+            Command::Weight(kg) if (20.0..=400.0).contains(&kg) => self.apply(data, ctx, Action::SetWeight(Some(kg))),
+            Command::Weight(kg) => {
+                data.status = format!("{kg} kg doesn't look like a body weight");
+                return true;
+            }
+            Command::Done(q) => match Self::find_task(data, &q) {
+                Some(i) => {
+                    let id = data.items[i].id.clone();
+                    let title = data.items[i].title.clone();
+                    if !data.items[i].is_done_on(today) {
+                        self.apply(data, ctx, Action::Toggle(id, today));
+                    }
+                    data.status = format!("✔ {title}");
+                }
+                None => {
+                    data.status = format!("No task matching \"{q}\" today");
+                    return true;
+                }
+            },
+            Command::Food(what) => {
+                self.ask_claude(data, ctx, what, true);
+            }
+        }
+        self.quick.clear();
+        true
+    }
+
+    fn quick_add(&mut self, data: &mut Data, ctx: &egui::Context) {
+        let text = self.quick.trim().to_string();
         if text.is_empty() {
             return;
         }
-        let p = parse_quick(text, Local::now().date_naive());
+        if self.run_command(data, ctx, &text) {
+            return;
+        }
+        let p = parse_quick(&text, Local::now().date_naive());
         if p.title.is_empty() {
             data.status = "Couldn't find a title in that".into();
             return;
@@ -417,12 +482,13 @@ impl App {
             }
             let add_w = 70.0;
             let hint = if claude_mode {
-                "Ask Claude… e.g. \"plan 3 gym sessions this week and healthy dinners\" or \"move laundry to sunday\"  (Ctrl+K)"
+                "Just start typing… \"plan 3 gym sessions this week\", \"I had a burrito for lunch\", \"I did my run\", \"I weigh 82.4\""
             } else {
-                "Add anything… e.g. \"leg day tomorrow 6pm 1h #workout\" or \"vacuum every saturday #chore\"  (Ctrl+K)"
+                "Just start typing… \"gym tomorrow 6pm #workout\", \"450 kcal pasta\", \"82.4 kg\", \"done vacuum\", \"ate a burrito\""
             };
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.quick)
+                    .id(Id::new(QUICK_ID))
                     .hint_text(hint)
                     .desired_width(ui.available_width() - add_w)
                     .font(egui::TextStyle::Body),
@@ -430,6 +496,18 @@ impl App {
             if self.focus_quick {
                 resp.request_focus();
                 self.focus_quick = false;
+                // put the caret after what was typed
+                let id = Id::new(QUICK_ID);
+                if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
+                    let end = egui::text::CCursor::new(self.quick.chars().count());
+                    state.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(end)));
+                    state.store(ui.ctx(), id);
+                }
+            }
+            // Esc clears the bar (egui already drops focus on Esc, so catch it as focus is lost)
+            if (resp.has_focus() || resp.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.quick.clear();
+                resp.surrender_focus();
             }
             let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let label = if claude_mode { "Ask" } else { "Add" };
@@ -439,7 +517,7 @@ impl App {
                     let request = self.quick.clone();
                     self.ask_claude(data, ui.ctx(), request, false);
                 } else {
-                    self.quick_add(data);
+                    self.quick_add(data, ui.ctx());
                 }
                 resp.request_focus();
             }
@@ -447,6 +525,20 @@ impl App {
         self.claude_panel(ui, data);
         // live preview of how the text was understood
         if !Self::claude_mode(data) && !self.quick.trim().is_empty() {
+            if let Some(cmd) = parse_command(&self.quick) {
+                let text = match cmd {
+                    Command::Calories { kcal, what } if what.is_empty() => format!("» log {kcal} kcal"),
+                    Command::Calories { kcal, what } => format!("» log {kcal} kcal · {what}"),
+                    Command::Weight(kg) => format!("» weight {kg:.1} kg today"),
+                    Command::Done(q) => match Self::find_task(data, &q) {
+                        Some(i) => format!("» tick off \"{}\"", data.items[i].title),
+                        None => format!("» no task matching \"{q}\" today"),
+                    },
+                    Command::Food(what) => format!("» estimate calories with Claude: \"{what}\""),
+                };
+                ui.label(RichText::new(text).weak().italics());
+                return;
+            }
             let p = parse_quick(&self.quick, Local::now().date_naive());
             let date = if p.someday { None } else { p.date.or(Some(self.default_day())) };
             let mut parts = vec![format!("[{}]", p.kind.as_deref().unwrap_or("task")), format!("\"{}\"", p.title)];
@@ -540,6 +632,18 @@ impl eframe::App for App {
         if let Some(food) = crate::notify::take_pending_food() {
             self.view = View::Today;
             self.ask_claude(&mut data, ctx, food, true);
+        }
+        let typed: String = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| if let egui::Event::Text(t) = e { Some(t.as_str()) } else { None })
+                .collect()
+        });
+        let no_dialog = self.editor.is_none() && self.import.is_none() && self.settings.is_none();
+        // Only when no text box is taking keyboard input (a focused button or tile doesn't count).
+        if !typed.is_empty() && no_dialog && !ctx.wants_keyboard_input() {
+            self.quick.push_str(&typed);
+            self.focus_quick = true;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
             self.focus_quick = true;

@@ -18,7 +18,7 @@ pub const MODELS: &[(&str, &str)] = &[
 
 const SYSTEM_PROMPT: &str = "You are the planning assistant inside Morrowkeep, a personal planner for tasks, chores, meals and workouts. \
 You turn the user's request into a Morrowkeep import JSON document. Reply with ONLY that JSON object: no prose, no explanation. \
-If you need to tell the user something (e.g. an assumption you made), put one short sentence in a top-level \"message\" field. When the user describes food or drink they had, log it in \"calories\" and estimate on the HIGH side: generous portions when no amount is given, include cooking fat, sauces and drinks, round up. The user prefers overcounting to undercounting.";
+If you need to tell the user something (e.g. an assumption you made), put one short sentence in a top-level \"message\" field. When the user describes food or drink they had, log it in \"calories\" and estimate on the HIGH side: generous portions when no amount is given, include cooking fat, sauces and drinks, round up. The user prefers overcounting to undercounting. When the user says they did or finished a task, mark it done by sending its id with \"done\": true. When they give their weight, log it in \"weight\".";
 
 /// The CLI to run: the path from settings, else `claude` on PATH, the standard installer
 /// location, or the newest copy bundled with the Claude desktop app.

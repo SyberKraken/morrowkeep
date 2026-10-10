@@ -130,7 +130,23 @@ Claude desktop app. Sign it in once: run it in a terminal, type `/login`, choose
 account, then use **Test connection** in Settings. This is meant for your own personal use of
 your own subscription.
 
-## Quick-add cheat sheet
+## The entry bar
+
+Start typing anywhere in the window and it goes into the entry bar, unless another text box is
+active. Esc clears it. In **Local** mode (free, offline) it understands:
+
+| you type | does |
+|---|---|
+| `450 kcal pasta`, `+450`, `kcal 300 snack` | logs calories |
+| `82.4 kg`, `weight 82,4`, `weighed 82.4` | logs today's weight |
+| `done vacuum`, `did push-ups` | ticks off the matching task for today |
+| `ate a chicken burrito` | estimates the calories with Claude, then shows them for review |
+| anything else | adds a task (see below) |
+
+The preview line under the bar always shows what Enter will do. In **Claude** mode, everything
+goes to Claude, which can plan, log food, record weight and tick off tasks.
+
+### Tasks
 
 | you type / say | becomes |
 |---|---|
@@ -142,12 +158,12 @@ your own subscription.
 | `#workout`, `#chore`, `#meal`, or a leading `Workout:` | kind |
 | `someday` / `backlog` | no date |
 
-Anything else becomes the title. Without a date, the item goes on today (in Today view) or on
-the selected day (in Calendar view).
+Anything else becomes the title. Without a date, the item goes on today (or on the selected day
+in Calendar view).
 
 ## Shortcuts
 
-- `Ctrl+K`: focus quick add
+- Just type: goes to the entry bar (`Ctrl+K` also focuses it, `Esc` clears it)
 - `Enter`: add
 - `Ctrl+Enter`: save in the editor
 - `Esc`: close a dialog
