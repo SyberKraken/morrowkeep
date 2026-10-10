@@ -118,8 +118,10 @@ pub fn charts(ui: &mut Ui, data: &Data, period: &mut Period) {
         }
     });
     let from = today - Duration::days(period.days() - 1);
-    let chart_h = ((ui.available_height() - 120.0) / 2.0).max(160.0);
+    let chart_h = ((ui.available_height() - 120.0) / 2.0).clamp(180.0, 320.0);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        super::streaks::streaks_section(ui, data, period.days());
+        ui.add_space(18.0);
         weight_chart(ui, data, from, today, chart_h);
         ui.add_space(14.0);
         calorie_chart(ui, data, from, today, chart_h);

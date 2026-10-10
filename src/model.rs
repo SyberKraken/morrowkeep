@@ -33,6 +33,9 @@ pub struct Item {
     /// Done flag for non-repeating items.
     #[serde(default, skip_serializing_if = "is_false")]
     pub done: bool,
+    /// When a non-repeating item was completed (for history views).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_on: Option<NaiveDate>,
     /// Completed occurrences of repeating items.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub done_dates: Vec<NaiveDate>,
@@ -73,6 +76,7 @@ impl Item {
             notes: String::new(),
             tags: Vec::new(),
             done: false,
+            done_on: None,
             done_dates: Vec::new(),
             sync_google: true,
             created: now,
@@ -108,9 +112,25 @@ impl Item {
             }
             // Not touched: occurrence check-offs aren't mirrored to Google, so no re-push.
         } else {
-            self.done = !self.done;
-            self.touch();
+            self.set_done(!self.done);
         }
+    }
+
+    /// Marks a non-repeating item done or not, recording when it was completed.
+    pub fn set_done(&mut self, done: bool) {
+        if done && !self.done {
+            self.done_on = Some(Local::now().date_naive());
+        } else if !done {
+            self.done_on = None;
+        }
+        self.done = done;
+        self.touch();
+    }
+
+    /// Day a non-repeating item was completed. Items finished before completion dates were
+    /// recorded fall back to their scheduled day.
+    pub fn completed_on(&self) -> Option<NaiveDate> {
+        (self.repeat.is_none() && self.done).then(|| self.done_on.or(self.date)).flatten()
     }
 
     pub fn end_time(&self) -> Option<NaiveTime> {

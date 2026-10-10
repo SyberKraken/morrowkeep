@@ -2,6 +2,7 @@
 
 mod board;
 mod charts;
+mod streaks;
 mod dialogs;
 mod views;
 

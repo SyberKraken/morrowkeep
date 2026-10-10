@@ -142,7 +142,9 @@ impl Editor {
         item.notes = self.notes.trim_end().to_string();
         item.tags = self.tags.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
         item.sync_google = self.sync_google;
-        item.done = self.done;
+        if item.repeat.is_none() {
+            item.set_done(self.done);
+        }
         item.touch();
         match data.item_index(&item.id) {
             Some(i) => data.items[i] = item,

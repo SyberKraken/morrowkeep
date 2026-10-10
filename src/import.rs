@@ -346,7 +346,7 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate) -> 
                 _ => errs.push("\"tags\" must be an array of strings".into()),
             },
             "done" => match val.as_bool() {
-                Some(b) => item.done = b,
+                Some(b) => item.set_done(b),
                 None => errs.push("\"done\" must be true or false".into()),
             },
             "sync_google" => match val.as_bool() {

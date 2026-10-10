@@ -614,8 +614,11 @@ pub fn month(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, a
             painter.text(cell.right_top() + Vec2::new(-6.0, 5.0), Align2::RIGHT_TOP, "not logged", FontId::proportional(11.0), NOT_LOGGED_COLOR);
         }
 
+        // that day's mini constellation along the bottom edge
+        let strip = Rect::from_min_max(Pos2::new(cell.left() + 2.0, cell.bottom() - 13.0), Pos2::new(cell.right() - 2.0, cell.bottom() - 1.0));
+        super::streaks::day_stars(&painter, strip, data, day, today, visuals.weak_text_color());
         if let Some(list) = by_day.get(&day) {
-            let max_lines = (((cell.height() - 24.0) / line_h).floor() as usize).max(1);
+            let max_lines = (((cell.height() - 37.0) / line_h).floor() as usize).max(1);
             let shown = if list.len() > max_lines { max_lines - 1 } else { list.len() };
             let clip = painter.with_clip_rect(cell);
             for (k, (t, title, color, done)) in list.iter().take(shown).enumerate() {
