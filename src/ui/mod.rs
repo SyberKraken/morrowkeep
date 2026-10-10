@@ -115,6 +115,8 @@ pub struct App {
     /// Theme version last applied to egui's visuals.
     theme_version: u64,
     applied_font: String,
+    /// Window level last applied (None = not yet).
+    on_top: Option<bool>,
     /// Status message being shown as a toast, and when it appeared.
     toast: Option<(String, std::time::Instant)>,
     last_status: String,
@@ -162,6 +164,7 @@ impl App {
             cal_input: CalorieInput::default(),
             theme_version: theme::version(),
             applied_font,
+            on_top: None,
             toast: None,
             last_status: String::new(),
             claude_session: start_in_claude,
@@ -775,6 +778,17 @@ impl eframe::App for App {
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
             self.focus_quick = true;
+        }
+        // F11: full screen on/off
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F11)) {
+            let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+        }
+        // Always on top, from Settings (applied when it changes and when the window opens)
+        if self.on_top != Some(data.settings.always_on_top) {
+            self.on_top = Some(data.settings.always_on_top);
+            let level = if data.settings.always_on_top { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal };
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
         }
 
         let mut actions = Vec::new();

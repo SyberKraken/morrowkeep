@@ -290,6 +290,8 @@ impl SettingsPage {
 
         subheading(ui, "Window");
         ui.checkbox(&mut self.draft.close_to_tray, "Closing the window keeps Morrowkeep running in the tray");
+        ui.checkbox(&mut self.draft.always_on_top, "Always on top (stay above other apps)");
+        note(ui, "Press F11 to switch full screen on and off.");
         let before = self.autostart;
         ui.checkbox(&mut self.autostart, "Start with Windows (in the tray)").on_hover_text("Applies right away");
         if self.autostart != before {

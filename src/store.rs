@@ -72,6 +72,8 @@ pub struct Settings {
     /// "en", "sv", ... or "auto". Non-English needs a multilingual model (no ".en").
     pub voice_language: String,
     pub close_to_tray: bool,
+    /// Keep the window above other apps.
+    pub always_on_top: bool,
     /// UI font: "inter" (default), "nunito", "segoe" or "egui".
     pub font: String,
     /// Theme file (stem) in the themes folder, e.g. "night-sky".
@@ -117,6 +119,7 @@ impl Default for Settings {
             daily_calorie_limit: 0,
             voice_language: "en".into(),
             close_to_tray: true,
+            always_on_top: false,
             font: "inter".into(),
             theme: "night-sky".into(),
             reminders_enabled: true,

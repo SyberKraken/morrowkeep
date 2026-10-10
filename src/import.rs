@@ -537,6 +537,7 @@ const SIMPLE_SETTINGS: &[&str] = &[
     "quiet_start",
     "quiet_end",
     "close_to_tray",
+    "always_on_top",
     "auto_sync",
     "sync_interval_min",
 ];
