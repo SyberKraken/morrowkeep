@@ -182,7 +182,10 @@ understands:
 | anything else | adds a task (see below) |
 
 The preview line under the bar always shows what Enter will do. In **Claude** mode, everything
-goes to Claude, which can plan, log food, record weight and tick off tasks.
+goes to Claude, which can plan, log food, record weight, tick off tasks and change settings
+("make the calorie color a little brighter", "add a study category with a vine streak", "no
+reminders before 9"). Settings changes show up in the preview, with color swatches, before you
+apply them.
 
 ### Tasks
 

@@ -410,6 +410,24 @@ impl Data {
         }
     }
 
+    /// Moves items between categories: renamed kinds to their new name, deleted kinds to
+    /// "task". Saves items if any changed; returns how many did.
+    pub fn move_kinds(&mut self, renamed: &std::collections::BTreeMap<String, String>, deleted: &std::collections::HashSet<String>) -> usize {
+        let mut moved = 0;
+        for item in &mut self.items {
+            let to = renamed.get(&item.kind).cloned().or_else(|| deleted.contains(&item.kind).then(|| crate::categories::DEFAULT_KIND.to_string()));
+            if let Some(to) = to {
+                item.kind = to;
+                item.touch();
+                moved += 1;
+            }
+        }
+        if moved > 0 {
+            self.save_items();
+        }
+        moved
+    }
+
     pub fn save_body(&mut self) {
         if let Some(e) = &self.body_error {
             self.status = format!("body.json could not be read ({e}). Fix it and restart; changes aren't saved until then.");

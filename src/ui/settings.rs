@@ -66,6 +66,8 @@ impl Section {
 
 pub struct SettingsPage {
     draft: Settings,
+    /// The saved settings the draft started from.
+    base: Settings,
     pull: String,
     pub section: Section,
     /// For each draft category, the name it had when loaded (None = added here); used to
@@ -87,6 +89,7 @@ impl SettingsPage {
     pub fn open(data: &Data) -> Self {
         SettingsPage {
             draft: data.settings.clone(),
+            base: data.settings.clone(),
             pull: data.settings.pull_calendars.join(", "),
             section: Section::General,
             origins: data.settings.categories.iter().map(|c| Some(c.name.clone())).collect(),
@@ -114,8 +117,21 @@ impl SettingsPage {
         s
     }
 
-    pub fn dirty(&self, data: &Data) -> bool {
-        self.effective() != data.settings
+    pub fn dirty(&self, _data: &Data) -> bool {
+        self.effective() != self.base
+    }
+
+    /// Settings saved elsewhere (e.g. by Claude) while this page was open: picked up if
+    /// nothing is being edited here, otherwise flagged.
+    fn changed_elsewhere(&mut self, data: &Data) -> bool {
+        if data.settings == self.base {
+            return false;
+        }
+        if self.effective() == self.base {
+            self.revert(data);
+            return false;
+        }
+        true
     }
 
     /// Why the draft can't be saved, if it can't.
@@ -158,18 +174,7 @@ impl SettingsPage {
         }
         let kept: HashSet<&str> = self.origins.iter().flatten().map(|s| s.as_str()).collect();
         let deleted: HashSet<String> = data.settings.categories.iter().map(|c| c.name.clone()).filter(|n| !kept.contains(n.as_str())).collect();
-        let mut moved = 0;
-        for item in &mut data.items {
-            let to = renamed.get(&item.kind).cloned().or_else(|| deleted.contains(&item.kind).then(|| categories::DEFAULT_KIND.to_string()));
-            if let Some(to) = to {
-                item.kind = to;
-                item.touch();
-                moved += 1;
-            }
-        }
-        if moved > 0 {
-            data.save_items();
-        }
+        let moved = data.move_kinds(&renamed, &deleted);
         if data.settings != new {
             data.settings = new;
             data.save_settings();
@@ -177,6 +182,7 @@ impl SettingsPage {
             data.status = if moved > 0 { format!("Settings saved · {moved} item(s) updated") } else { "Settings saved".into() };
         }
         self.draft = data.settings.clone();
+        self.base = data.settings.clone();
         self.origins = self.draft.categories.iter().map(|c| Some(c.name.clone())).collect();
         self.confirm_delete = None;
     }
@@ -207,6 +213,7 @@ impl SettingsPage {
     pub fn show(&mut self, ui: &mut Ui, data: &mut Data, jobs: &Sender<Job>) {
         let ctx = ui.ctx().clone();
         self.poll_connect(&ctx, data, jobs);
+        let elsewhere = self.changed_elsewhere(data);
         let dirty = self.dirty(data);
         let problem = self.problem();
         ui.add_space(10.0);
@@ -227,6 +234,9 @@ impl SettingsPage {
                 }
             });
         });
+        if elsewhere {
+            ui.label(RichText::new("Settings were changed elsewhere (e.g. by Claude) since you started editing. Save overwrites those changes; Revert picks them up.").color(super::theme::th().status.warning));
+        }
         ui.separator();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_max_width(980.0);

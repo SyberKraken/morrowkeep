@@ -114,6 +114,7 @@ pub struct App {
     cal_input: CalorieInput,
     /// Theme version last applied to egui's visuals.
     theme_version: u64,
+    applied_font: String,
     /// Status message being shown as a toast, and when it appeared.
     toast: Option<(String, std::time::Instant)>,
     last_status: String,
@@ -143,6 +144,7 @@ impl App {
         *ui_handle.lock().unwrap() = Some(cc.egui_ctx.clone());
         let today = Local::now().date_naive();
         let start_in_claude = shared.lock().unwrap().settings.default_input_mode == "claude";
+        let applied_font = shared.lock().unwrap().settings.font.clone();
         App {
             shared,
             jobs,
@@ -159,6 +161,7 @@ impl App {
             claude_job: None,
             cal_input: CalorieInput::default(),
             theme_version: theme::version(),
+            applied_font,
             toast: None,
             last_status: String::new(),
             claude_session: start_in_claude,
@@ -253,7 +256,7 @@ impl App {
             }
         }
         let Some((request, text)) = &self.claude_reply else { return };
-        let plan = import::plan(text, &data.items, &data.calories, Local::now().date_naive());
+        let plan = import::plan(text, &data.items, &data.calories, &data.settings, Local::now().date_naive());
         let mut close = false;
         let mut discard = false;
         let mut edit = None;
@@ -273,7 +276,7 @@ impl App {
                 if plan.errors.is_empty() {
                     egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
                         for op in &plan.ops {
-                            ui.label(RichText::new(op.describe()).monospace().size(12.5));
+                            op_line(ui, &op.describe());
                         }
                     });
                 }
@@ -744,6 +747,11 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let shared = self.shared.clone();
         let mut data = shared.lock().unwrap();
+        // a font changed outside the Settings page (e.g. by Claude)
+        if data.settings.font != self.applied_font {
+            self.applied_font = data.settings.font.clone();
+            theme::apply_fonts(ctx, &self.applied_font);
+        }
         if theme::version() != self.theme_version {
             self.theme_version = theme::version();
             theme::apply_visuals(ctx);
@@ -854,6 +862,29 @@ impl eframe::App for App {
 
         // Keep the clock / "now" line / day rollover current.
         ctx.request_repaint_after(Duration::from_secs(30));
+    }
+}
+
+/// One preview line (or several) of an import; "#RRGGBB" colors get a swatch in front.
+pub fn op_line(ui: &mut egui::Ui, text: &str) {
+    for line in text.lines() {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let mut buf = String::new();
+            for word in line.split_inclusive(' ') {
+                if let Some(c) = word.get(..7).and_then(crate::categories::parse_hex) {
+                    if !buf.is_empty() {
+                        ui.label(RichText::new(std::mem::take(&mut buf)).monospace().size(12.5));
+                    }
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 12.0), egui::Sense::hover());
+                    ui.painter().rect_filled(egui::Rect::from_center_size(r.center() - egui::vec2(2.0, 0.0), egui::vec2(11.0, 11.0)), 2.0, c);
+                }
+                buf.push_str(word);
+            }
+            if !buf.is_empty() {
+                ui.label(RichText::new(buf).monospace().size(12.5));
+            }
+        });
     }
 }
 

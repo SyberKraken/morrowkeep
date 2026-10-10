@@ -39,7 +39,7 @@ to the user, e.g. to mention an assumption you made.
 | field | required | format / meaning |
 |---|---|---|
 | `title` | yes (new items) | Short text. |
-| `kind` | no | `task` (default), `chore`, `meal`, `workout`, `event`, `habit`. Other lowercase words are allowed too. |
+| `kind` | no | One of the categories listed in the context (default `task`). Other lowercase words are allowed too. |
 | `date` | no | `YYYY-MM-DD`. Also accepted: `today`, `tomorrow`, `monday`, `next friday`, `+3d`, `+2w`. Leave it out for a backlog item with no date. For repeating items this is the first day. |
 | `time` | no | Start time `HH:MM`, 24-hour. Leave it out for "any time that day". |
 | `duration_min` | no | Minutes, as a number. Default 30 when there is a time. |
@@ -100,6 +100,45 @@ day, and a new value replaces that day's old one.
 
 `kg` is required (a number, in kilograms). Convert from pounds if needed (1 lb = 0.4536 kg).
 `date` defaults to today.
+
+## Changing settings
+
+When the user asks to change how Morrowkeep looks or behaves (colors, categories, reminders,
+theme), add a top-level `"settings"` object. The context lists the current values; change
+only what was asked and leave everything else out.
+
+```json
+{
+  "morrowkeep_import": 1,
+  "settings": {
+    "colors": { "calories": "#FF9A50" },
+    "categories": [
+      { "name": "meal", "color": "#FFB347" },
+      { "name": "study", "icon": "📚", "color": "#5B8CFF", "style": "vine" },
+      { "name": "chore", "rename": "chores" }
+    ],
+    "delete_categories": ["event"],
+    "quiet_start": "23:00"
+  },
+  "message": "Made the calorie orange about 15% lighter."
+}
+```
+
+| key | meaning |
+|---|---|
+| `colors` | `calories` and/or `weight`: `"#RRGGBB"`, or `null` to go back to the theme's color. |
+| `categories` | Task categories (the `kind` of items), matched by `name`. Fields: `icon` (one emoji), `color` (`"#RRGGBB"` or `null` for the theme's), `style` (`ribbon`, `comet`, `arcs`, `vine` or `constellation`: how streaks are drawn), `rename` (new name; tasks move along). A new name adds a category. |
+| `delete_categories` | Names to delete; their tasks become `task`. `task` can't be deleted or renamed. |
+| `theme`, `font` | One of the available themes / fonts listed in the context. |
+| `default_input_mode` | `local` or `claude`. |
+| `reminders_enabled`, `remind_anytime`, `remind_calories`, `remind_weight`, `close_to_tray`, `auto_sync` | `true` / `false`. |
+| `reminder_interval_min`, `sync_interval_min` | Minutes, a whole number. |
+| `calorie_reminder_after`, `weight_reminder_after`, `quiet_start`, `quiet_end` | `HH:MM`. |
+
+For relative requests ("a little brighter", "less saturated", "warmer"), start from the
+current color in the context and make a modest change (about 10–20% in lightness or
+saturation), keeping the hue unless asked otherwise. Colors should stay readable on the theme
+background given in the context. Say what you changed in `"message"`.
 
 ## Deleting
 

@@ -1,10 +1,12 @@
 //! Importing items from JSON (pasted, or dropped into the inbox folder). See IMPORT_FORMAT.md.
 
+use crate::categories::{self, Category, StreakStyle};
 use crate::model::{CalorieEntry, Item, Repeat, WeightEntry};
 use crate::parse::{parse_date, parse_duration, parse_time};
-use crate::store::{Data, IMPORT_FORMAT};
+use crate::store::{Data, Settings, IMPORT_FORMAT};
 use chrono::{Duration, Local, NaiveDate};
 use serde_json::{Map, Value};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 
 pub enum Op {
@@ -14,6 +16,7 @@ pub enum Op {
     LogCalories(CalorieEntry),
     LogWeight(WeightEntry),
     DeleteCalories { id: String, label: String },
+    Settings(Box<SettingsChange>),
 }
 
 impl Op {
@@ -44,6 +47,7 @@ impl Op {
             }
             Op::DeleteCalories { label, .. } => format!("- remove calories {label}"),
             Op::LogWeight(w) => format!("+ weight {:.1} kg · {}", w.kg, w.date.format("%a %b %-d")),
+            Op::Settings(s) => s.lines.join("\n"),
         }
     }
 }
@@ -95,7 +99,7 @@ fn escape_raw_controls(json: &str) -> String {
     out
 }
 
-pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], today: NaiveDate) -> Plan {
+pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: &Settings, today: NaiveDate) -> Plan {
     let mut plan = Plan::default();
     let json = extract_json(text);
     let parsed = serde_json::from_str(json).or_else(|e| serde_json::from_str(&escape_raw_controls(json)).map_err(|_| e));
@@ -137,13 +141,19 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], today: Nai
                 None => {}
                 Some(_) => plan.errors.push("\"calories\" must be an array".into()),
             }
+            if let Some(s) = o.remove("settings") {
+                match settings_from(s, settings, existing) {
+                    Ok(change) => plan.ops.push(Op::Settings(Box::new(change))),
+                    Err(errs) => plan.errors.extend(errs.into_iter().map(|e| format!("settings: {e}"))),
+                }
+            }
             o.remove("morrowkeep_import");
             o.remove("lifehub_import"); // the app's previous name
             if let Some(Value::String(m)) = o.remove("message") {
                 plan.message = Some(m);
             }
             for k in o.keys() {
-                plan.errors.push(format!("unknown top-level field \"{k}\" (expected \"items\", \"calories\", \"weight\", \"delete\", \"message\")"));
+                plan.errors.push(format!("unknown top-level field \"{k}\" (expected \"items\", \"calories\", \"weight\", \"settings\", \"delete\", \"message\")"));
             }
             (items, deletes)
         }
@@ -403,6 +413,7 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
     let (mut a, mut u, mut d) = (0, 0, 0);
     let (mut kcal, mut cal_changed) = (0u32, false);
     let mut weights = 0;
+    let mut settings_note = None;
     for op in ops {
         match op {
             Op::Add(item) => {
@@ -433,6 +444,20 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
                 data.set_weight(w.date, Some(w.kg));
                 weights += 1;
             }
+            Op::Settings(change) => {
+                let SettingsChange { mut new, renames, deletes, .. } = *change;
+                data.move_kinds(&renames, &deletes);
+                if new.theme != data.settings.theme {
+                    if let Err(e) = crate::ui::theme::activate(&data.paths.root, &new.theme) {
+                        settings_note = Some(format!("theme not changed: {e}"));
+                        new.theme = data.settings.theme.clone();
+                    }
+                }
+                data.settings = new;
+                data.save_settings();
+                categories::apply(&data.settings.categories, &data.settings.colors);
+                settings_note.get_or_insert_with(|| "settings changed".into());
+            }
         }
     }
     data.save_items();
@@ -451,6 +476,7 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
     if weights > 0 {
         parts.push(format!("{weights} weight entr{}", if weights == 1 { "y" } else { "ies" }));
     }
+    parts.extend(settings_note);
     parts.join(", ")
 }
 
@@ -471,7 +497,7 @@ pub fn process_inbox(data: &mut Data) -> Option<String> {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let stamp = Local::now().format("%Y%m%d-%H%M%S");
         let today = Local::now().date_naive();
-        let p = plan(&text, &data.items, &data.calories, today);
+        let p = plan(&text, &data.items, &data.calories, &data.settings, today);
         if p.errors.is_empty() {
             let summary = apply(data, p.ops);
             let _ = fs::rename(&path, data.paths.inbox.join("imported").join(format!("{stamp}-{name}")));
@@ -484,6 +510,274 @@ pub fn process_inbox(data: &mut Data) -> Option<String> {
         }
     }
     (!msgs.is_empty()).then(|| format!("Inbox: {}", msgs.join("; ")))
+}
+
+/// A validated change to settings from an import (Claude or pasted JSON).
+pub struct SettingsChange {
+    pub new: Settings,
+    /// Category renames (old → new) and deletions, which move tasks along on apply.
+    pub renames: BTreeMap<String, String>,
+    pub deletes: HashSet<String>,
+    /// One line per change, for the preview.
+    pub lines: Vec<String>,
+}
+
+/// Settings an import may change directly (besides "colors" and "categories").
+const SIMPLE_SETTINGS: &[&str] = &[
+    "theme",
+    "font",
+    "default_input_mode",
+    "reminders_enabled",
+    "reminder_interval_min",
+    "remind_anytime",
+    "remind_calories",
+    "calorie_reminder_after",
+    "remind_weight",
+    "weight_reminder_after",
+    "quiet_start",
+    "quiet_end",
+    "close_to_tray",
+    "auto_sync",
+    "sync_interval_min",
+];
+
+fn hex_or_theme(c: Option<&str>, theme: eframe::egui::Color32) -> String {
+    match c {
+        Some(h) => h.to_string(),
+        None => format!("{} (theme)", categories::to_hex(theme)),
+    }
+}
+
+fn settings_from(v: Value, current: &Settings, existing: &[Item]) -> Result<SettingsChange, Vec<String>> {
+    let Value::Object(mut o) = v else { return Err(vec!["must be an object".into()]) };
+    let mut errs = Vec::new();
+    let mut lines = Vec::new();
+    let th = crate::ui::theme::th();
+
+    // plain values: merge into the current settings and let serde check the types
+    let mut merged = serde_json::to_value(current).unwrap_or(Value::Null);
+    let mut simple_changed = Vec::new();
+    for key in SIMPLE_SETTINGS {
+        let Some(val) = o.remove(*key) else { continue };
+        let ok = match *key {
+            "default_input_mode" => matches!(val.as_str(), Some("local" | "claude")),
+            "font" => val.as_str().is_some_and(|f| crate::ui::theme::FONTS.iter().any(|(v, _)| *v == f)),
+            "theme" => val.as_str().is_some_and(|t| !t.trim().is_empty()),
+            k if k.ends_with("_after") || k.starts_with("quiet_") => {
+                val.as_str().is_some_and(|t| chrono::NaiveTime::parse_from_str(t, "%H:%M").is_ok())
+            }
+            _ => true,
+        };
+        if !ok {
+            errs.push(format!("{key}: {val} isn't a valid value"));
+            continue;
+        }
+        if merged[key] != val {
+            lines.push(format!("~ setting {key}: {} → {}", merged[key], val));
+            merged[*key] = val;
+            simple_changed.push(*key);
+        }
+    }
+    let mut new: Settings = match serde_json::from_value(merged) {
+        Ok(s) => s,
+        Err(e) => {
+            errs.push(format!("{e}"));
+            current.clone()
+        }
+    };
+
+    // colors: "#RRGGBB" or null (back to the theme's)
+    if let Some(c) = o.remove("colors") {
+        match c {
+            Value::Object(m) => {
+                for (k, val) in m {
+                    let slot = match k.as_str() {
+                        "calories" => (&mut new.colors.calories, th.data.calories),
+                        "weight" => (&mut new.colors.weight, th.data.weight),
+                        _ => {
+                            errs.push(format!("colors: unknown color \"{k}\" (expected \"calories\" or \"weight\")"));
+                            continue;
+                        }
+                    };
+                    let value = match &val {
+                        Value::Null => None,
+                        Value::String(s) => match categories::parse_hex(s) {
+                            Some(c) => Some(categories::to_hex(c)),
+                            None => {
+                                errs.push(format!("colors.{k}: \"{s}\" isn't a #RRGGBB color"));
+                                continue;
+                            }
+                        },
+                        _ => {
+                            errs.push(format!("colors.{k}: use \"#RRGGBB\" or null"));
+                            continue;
+                        }
+                    };
+                    if *slot.0 != value {
+                        lines.push(format!("~ {k} color: {} → {}", hex_or_theme(slot.0.as_deref(), slot.1), hex_or_theme(value.as_deref(), slot.1)));
+                        *slot.0 = value;
+                    }
+                }
+            }
+            _ => errs.push("colors: must be an object".into()),
+        }
+    }
+
+    // categories: upsert by name, optional rename
+    let mut renames = BTreeMap::new();
+    let count = |kind: &str| existing.iter().filter(|i| i.kind == kind).count();
+    if let Some(c) = o.remove("categories") {
+        let Value::Array(arr) = c else { return Err(vec!["categories: must be an array".into()]) };
+        for (n, cv) in arr.into_iter().enumerate() {
+            let label = format!("categories {}", n + 1);
+            let Value::Object(co) = cv else {
+                errs.push(format!("{label}: must be an object"));
+                continue;
+            };
+            let Some(name) = co.get("name").and_then(Value::as_str).map(categories::clean_name).filter(|n| !n.is_empty()) else {
+                errs.push(format!("{label}: \"name\" is required"));
+                continue;
+            };
+            let idx = new.categories.iter().position(|x| x.name == name);
+            let before = idx.map(|i| new.categories[i].clone());
+            let mut cat = before.clone().unwrap_or_else(|| Category::new(&name, "⭐", StreakStyle::Constellation));
+            for (k, val) in &co {
+                match k.as_str() {
+                    "name" => {}
+                    "icon" => match val.as_str().filter(|s| !s.trim().is_empty()) {
+                        Some(s) => cat.icon = s.trim().to_string(),
+                        None => errs.push(format!("{label}: \"icon\" must be text")),
+                    },
+                    "color" => match val {
+                        Value::Null => cat.color = None,
+                        Value::String(s) => match categories::parse_hex(s) {
+                            Some(c) => cat.color = Some(categories::to_hex(c)),
+                            None => errs.push(format!("{label}: \"{s}\" isn't a #RRGGBB color")),
+                        },
+                        _ => errs.push(format!("{label}: \"color\" must be \"#RRGGBB\" or null")),
+                    },
+                    "style" => match serde_json::from_value::<StreakStyle>(val.clone()) {
+                        Ok(s) => cat.style = s,
+                        Err(_) => errs.push(format!("{label}: \"style\" must be ribbon, comet, arcs, vine or constellation")),
+                    },
+                    "rename" => {
+                        let to = val.as_str().map(categories::clean_name).unwrap_or_default();
+                        if name == categories::DEFAULT_KIND {
+                            errs.push(format!("{label}: \"task\" can't be renamed"));
+                        } else if to.is_empty() || new.categories.iter().any(|x| x.name == to) {
+                            errs.push(format!("{label}: can't rename to \"{to}\""));
+                        } else {
+                            if cat.color.is_none() {
+                                cat.color = Some(categories::to_hex(crate::ui::kind_color(&name)));
+                            }
+                            renames.insert(name.clone(), to.clone());
+                            lines.push(format!("~ rename category {name} → {to} ({} tasks move along)", count(&name)));
+                            cat.name = to;
+                        }
+                    }
+                    other => errs.push(format!("{label}: unknown field \"{other}\" (expected name, icon, color, style, rename)")),
+                }
+            }
+            match (idx, before) {
+                (Some(i), Some(b)) => {
+                    let mut what = Vec::new();
+                    if b.icon != cat.icon {
+                        what.push(format!("icon {} → {}", b.icon, cat.icon));
+                    }
+                    if b.color != cat.color && !renames.contains_key(&b.name) {
+                        let theme = th.kind(&b.name);
+                        what.push(format!("color {} → {}", hex_or_theme(b.color.as_deref(), theme), hex_or_theme(cat.color.as_deref(), theme)));
+                    }
+                    if b.style != cat.style {
+                        what.push(format!("style {} → {}", b.style.label().to_lowercase(), cat.style.label().to_lowercase()));
+                    }
+                    if !what.is_empty() {
+                        lines.push(format!("~ category {}: {}", b.name, what.join(", ")));
+                    }
+                    new.categories[i] = cat;
+                }
+                _ => {
+                    lines.push(format!(
+                        "+ category {} {} · {} · {}",
+                        cat.name,
+                        cat.icon,
+                        cat.style.label().to_lowercase(),
+                        hex_or_theme(cat.color.as_deref(), th.kind(&cat.name))
+                    ));
+                    new.categories.push(cat);
+                }
+            }
+        }
+    }
+    let mut deletes = HashSet::new();
+    if let Some(d) = o.remove("delete_categories") {
+        let Value::Array(arr) = d else { return Err(vec!["delete_categories: must be an array of names".into()]) };
+        for v in arr {
+            let name = v.as_str().map(categories::clean_name).unwrap_or_default();
+            if name == categories::DEFAULT_KIND {
+                errs.push("delete_categories: \"task\" can't be deleted".into());
+            } else if let Some(i) = new.categories.iter().position(|c| c.name == name) {
+                new.categories.remove(i);
+                lines.push(format!("- delete category {name} ({} tasks become \"task\")", count(&name)));
+                deletes.insert(name);
+            } else {
+                errs.push(format!("delete_categories: no category \"{name}\""));
+            }
+        }
+    }
+    for k in o.keys() {
+        errs.push(format!("unknown setting \"{k}\""));
+    }
+    if !errs.is_empty() {
+        return Err(errs);
+    }
+    if lines.is_empty() {
+        lines.push("(settings unchanged)".into());
+    }
+    Ok(SettingsChange { new, renames, deletes, lines })
+}
+
+/// Current settings as Claude sees them: effective colors (yours or the theme's) and the
+/// values it may change.
+fn settings_context(data: &Data) -> Value {
+    let th = crate::ui::theme::th();
+    let s = &data.settings;
+    let mut from_theme = Vec::new();
+    if s.colors.calories.is_none() {
+        from_theme.push("calories");
+    }
+    if s.colors.weight.is_none() {
+        from_theme.push("weight");
+    }
+    let cats: Vec<Value> = s
+        .categories
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "name": c.name,
+                "icon": c.icon,
+                "color": categories::to_hex(crate::ui::kind_color(&c.name)),
+                "color_from_theme": c.color.is_none(),
+                "style": c.style,
+            })
+        })
+        .collect();
+    let mut v = serde_json::json!({
+        "colors": {
+            "calories": categories::to_hex(crate::ui::calorie_color()),
+            "weight": categories::to_hex(crate::ui::weight_color()),
+        },
+        "colors_from_theme": from_theme,
+        "categories": cats,
+        "available_themes": crate::ui::theme::list(&data.paths.root).into_iter().map(|(stem, _)| stem).collect::<Vec<_>>(),
+        "available_fonts": crate::ui::theme::FONTS.iter().map(|(v, _)| *v).collect::<Vec<_>>(),
+        "theme_background": categories::to_hex(th.surface.page),
+    });
+    let all = serde_json::to_value(s).unwrap_or(Value::Null);
+    for k in SIMPLE_SETTINGS {
+        v[*k] = all[*k].clone();
+    }
+    v
 }
 
 /// Text to paste into an external AI chat: the format spec plus today's date and the
@@ -529,6 +823,10 @@ pub fn ai_context(data: &Data, days_ahead: i64) -> String {
                 k => t += &format!(" Daily calorie limit: {k} kcal."),
             }
             t += &format!("\n\nCategories (use these as \"kind\"): {}.", crate::categories::names().join(", "));
+            t += &format!(
+                "\n\nCurrent settings (change them with a top-level \"settings\" object, see above):\n\n```json\n{}\n```",
+                serde_json::to_string_pretty(&settings_context(data)).unwrap_or_default()
+            );
             t
         },
         serde_json::to_string_pretty(&relevant).unwrap_or_default(),
@@ -552,7 +850,7 @@ mod tests {
             {"id":"abc","notes":"changed"}
         ],"delete":[]}
         ```"#;
-        let p = plan(text, &[existing.clone()], &[], today);
+        let p = plan(text, &[existing.clone()], &[], &Settings::default(), today);
         assert!(p.errors.is_empty(), "{:?}", p.errors);
         assert_eq!(p.ops.len(), 2);
         match &p.ops[0] {
@@ -566,23 +864,50 @@ mod tests {
             Op::Update(i) => assert_eq!((i.title.as_str(), i.notes.as_str()), ("Old", "changed")),
             _ => panic!(),
         }
-        let raw_newline = plan("{\"items\":[{\"title\":\"Bowl\",\"notes\":\"line 1\nline 2\"}],\"message\":\"hi\"}", &[], &[], today);
+        let raw_newline = plan("{\"items\":[{\"title\":\"Bowl\",\"notes\":\"line 1\nline 2\"}],\"message\":\"hi\"}", &[], &[], &Settings::default(), today);
         assert!(raw_newline.errors.is_empty(), "{:?}", raw_newline.errors);
         assert_eq!(raw_newline.message.as_deref(), Some("hi"));
-        let bad = plan(r#"[{"title":"x","date":"someday","colour":"red"}]"#, &[], &[], today);
+        let bad = plan(r#"[{"title":"x","date":"someday","colour":"red"}]"#, &[], &[], &Settings::default(), today);
         assert_eq!(bad.errors.len(), 2, "{:?}", bad.errors);
 
         let cal = plan(
             r#"{"calories":[{"kcal":652.4,"description":"2 fried eggs ~240, toast + butter ~330, latte ~90","time":"08:30"},{"kcal":0}]}"#,
             &[],
             &[],
+            &Settings::default(),
             today,
         );
         assert_eq!(cal.errors.len(), 1, "{:?}", cal.errors); // kcal 0 is rejected
-        let ok = plan(r#"{"calories":[{"kcal":652.4,"description":"eggs","date":"2026-10-09"}]}"#, &[], &[], today);
+        let ok = plan(r#"{"calories":[{"kcal":652.4,"description":"eggs","date":"2026-10-09"}]}"#, &[], &[], &Settings::default(), today);
         match &ok.ops[0] {
             Op::LogCalories(c) => assert_eq!((c.kcal, c.date.to_string(), c.time), (653, "2026-10-09".to_string(), None)),
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn settings_changes_are_validated_and_described() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 10).unwrap();
+        let mut chore = Item::new("Vacuum");
+        chore.kind = "chore".into();
+        let current = Settings::default();
+        let text = r##"{"settings":{"colors":{"calories":"#ff9a50"},"quiet_start":"23:00",
+            "categories":[{"name":"meal","icon":"☕","style":"vine"},{"name":"study","icon":"📚","color":"#3366FF"},{"name":"chore","rename":"chores"}],
+            "delete_categories":["event"]}}"##;
+        let p = plan(text, &[chore], &[], &current, today);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let Op::Settings(ch) = &p.ops[0] else { panic!() };
+        assert_eq!(ch.new.colors.calories.as_deref(), Some("#FF9A50"));
+        assert_eq!(ch.new.quiet_start, "23:00");
+        let meal = ch.new.categories.iter().find(|c| c.name == "meal").unwrap();
+        assert_eq!((meal.icon.as_str(), meal.style), ("☕", StreakStyle::Vine));
+        assert!(ch.new.categories.iter().any(|c| c.name == "study" && c.color.as_deref() == Some("#3366FF")));
+        assert!(ch.new.categories.iter().any(|c| c.name == "chores" && c.color.is_some())); // keeps its color
+        assert!(!ch.new.categories.iter().any(|c| c.name == "event" || c.name == "chore"));
+        assert_eq!(ch.renames.get("chore").map(String::as_str), Some("chores"));
+        assert!(ch.lines.iter().any(|l| l.contains("rename category chore → chores (1 tasks")));
+        // bad values are rejected with reasons, nothing applied
+        let bad = plan(r##"{"settings":{"colors":{"calories":"orange","sky":"#000000"},"quiet_end":"late","google_client_secret":"x","delete_categories":["task"]}}"##, &[], &[], &current, today);
+        assert_eq!(bad.errors.len(), 5, "{:?}", bad.errors);
     }
 }
