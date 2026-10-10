@@ -139,5 +139,8 @@ Run key, so Morrowkeep starts in the tray.
 
 ## License
 
-[MIT](LICENSE). The vendored `vendor/whisper-rs-sys` (including whisper.cpp) keeps its own
-license files.
+[MIT](LICENSE).
+
+Third-party code in `vendor/whisper-rs-sys`: the `whisper-rs-sys` crate is released under the
+[Unlicense](https://unlicense.org/). The whisper.cpp sources inside it are MIT-licensed by the ggml
+authors (see `vendor/whisper-rs-sys/whisper.cpp/LICENSE`).
