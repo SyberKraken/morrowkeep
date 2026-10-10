@@ -5,9 +5,11 @@
 //!   tiles fill with their color and get a checkmark, so the board fills up as you work.
 //! - Completing a tile flips it over, it stays a moment, then moves to the completion tray
 //!   (click a tray chip to undo). The last tile is always "add a task".
-//! - A small constellation in the header lights a star per finished task.
+//! - A constellation in the header lights a star per finished task, plus two fixed stars
+//!   for "calories logged today" and "weight logged today".
 
-use super::{kind_color, Action, GOOGLE_COLOR};
+use super::charts::WEIGHT_COLOR;
+use super::{kind_color, Action, CALORIE_COLOR, GOOGLE_COLOR};
 use crate::model::Item;
 use crate::store::Data;
 use chrono::NaiveDate;
@@ -138,55 +140,89 @@ fn draw_add_tile(ui: &Ui, rect: Rect, hovered: bool) {
 /// The page's progress display: one star per task, lit in the task's color when done, with
 /// lines joining neighbouring lit stars. Spreads across the available width.
 fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate) {
-    let n = ids.len();
-    let done = ids.iter().filter(|i| data.items[**i].is_done_on(day)).count();
-    let width = ui.available_width();
-    let height = 56.0;
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-    if n == 0 {
-        ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "No habits for today yet. Add one below.", FontId::proportional(15.0), ui.visuals().weak_text_color());
-        return;
+    // Two fixed trackers first (always in the same place), then one star per task.
+    struct Star {
+        lit: bool,
+        color: Color32,
+        label: Option<&'static str>,
     }
+    let kcal_logged = data.calories_on(day) > 0;
+    let weight_logged = data.weight_on(day).is_some();
+    let mut stars = vec![
+        Star { lit: kcal_logged, color: CALORIE_COLOR, label: Some("kcal") },
+        Star { lit: weight_logged, color: WEIGHT_COLOR, label: Some("kg") },
+    ];
+    stars.extend(ids.iter().map(|i| {
+        let item = &data.items[*i];
+        Star { lit: item.is_done_on(day), color: kind_color(&item.kind), label: None }
+    }));
+    let n = stars.len();
+    let done = stars.iter().filter(|s| s.lit).count();
+    let tasks_done = ids.iter().filter(|i| data.items[**i].is_done_on(day)).count();
+
+    let width = ui.available_width();
+    let height = 64.0;
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let all_done = done == n;
     // trophy space on the right when everything is done
     let right_pad = if all_done { 190.0 } else { 20.0 };
-    let step = ((width - 20.0 - right_pad) / n.max(1) as f32).clamp(22.0, 64.0);
+    let step = ((width - 20.0 - right_pad) / n as f32).clamp(22.0, 64.0);
     let painter = ui.painter();
     let dim = ui.visuals().weak_text_color().linear_multiply(0.7);
-    let pts: Vec<(Pos2, bool, Color32)> = ids
-        .iter()
-        .enumerate()
-        .map(|(i, idx)| {
-            let item = &data.items[*idx];
+    let cy = rect.center().y - 4.0; // leave room for the tracker labels underneath
+    let pts: Vec<Pos2> = (0..n)
+        .map(|i| {
             // zig-zag so it reads as a constellation rather than a progress bar
-            let y = rect.center().y + if i % 2 == 0 { -9.0 } else { 9.0 };
-            (Pos2::new(rect.left() + 14.0 + step * i as f32, y), item.is_done_on(day), kind_color(&item.kind))
+            Pos2::new(rect.left() + 14.0 + step * i as f32, cy + if i % 2 == 0 { -9.0 } else { 9.0 })
         })
         .collect();
     // faint path through all stars, brighter segments between lit neighbours
-    for w in pts.windows(2) {
-        let (stroke_w, color) = if w[0].1 && w[1].1 { (2.5, w[1].2.linear_multiply(0.8)) } else { (1.0, dim.linear_multiply(0.35)) };
-        painter.line_segment([w[0].0, w[1].0], Stroke::new(stroke_w, color));
+    for i in 1..n {
+        let (a, b) = (&stars[i - 1], &stars[i]);
+        let (stroke_w, color) = if a.lit && b.lit { (2.5, b.color.linear_multiply(0.8)) } else { (1.0, dim.linear_multiply(0.35)) };
+        painter.line_segment([pts[i - 1], pts[i]], Stroke::new(stroke_w, color));
     }
-    for (p, lit, c) in &pts {
-        if *lit {
-            painter.circle_filled(*p, 15.0, c.linear_multiply(0.12)); // outer glow
-            painter.circle_filled(*p, 10.0, c.linear_multiply(0.3));
-            painter.circle_filled(*p, 6.5, *c);
+    for (p, star) in pts.iter().zip(&stars) {
+        if star.lit {
+            painter.circle_filled(*p, 15.0, star.color.linear_multiply(0.12)); // outer glow
+            painter.circle_filled(*p, 10.0, star.color.linear_multiply(0.3));
+            painter.circle_filled(*p, 6.5, star.color);
         } else {
             painter.circle_stroke(*p, 5.5, Stroke::new(1.6, dim));
+        }
+        if let Some(label) = star.label {
+            // identity in text, not color alone
+            let ink = if star.lit { ui.visuals().text_color() } else { ui.visuals().weak_text_color() };
+            painter.text(Pos2::new(p.x, rect.bottom() - 2.0), Align2::CENTER_BOTTOM, label, FontId::proportional(11.0), ink);
         }
     }
     if all_done {
         painter.text(
-            Pos2::new(pts.last().unwrap().0.x + 30.0, rect.center().y),
+            Pos2::new(pts[n - 1].x + 30.0, cy),
             Align2::LEFT_CENTER,
-            format!("🏆 All {n} done!"),
+            "🏆 All done today!",
             FontId::proportional(20.0),
             Color32::from_rgb(46, 160, 103),
         );
+    } else if ids.is_empty() {
+        painter.text(
+            Pos2::new(pts[n - 1].x + 30.0, cy),
+            Align2::LEFT_CENTER,
+            "No habits for today yet. Add one below.",
+            FontId::proportional(15.0),
+            ui.visuals().weak_text_color(),
+        );
     }
-    resp.on_hover_text(format!("{done} of {n} done today"));
+    let mark = |b: bool| if b { "✔" } else { "not yet" };
+    resp.on_hover_text(format!(
+        "{done} of {n} done today
+Calories logged: {}
+Weight logged: {}
+Tasks: {tasks_done} of {}",
+        mark(kcal_logged),
+        mark(weight_logged),
+        ids.len()
+    ));
 }
 
 /// The Habits page board. `ids`: today's untimed item indices in display
