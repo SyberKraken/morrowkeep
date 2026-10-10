@@ -284,11 +284,23 @@ fn goal_card(ui: &mut Ui, data: &mut Data, st: &mut BodyUi, today: NaiveDate) {
             }
         });
         ui.add_space(6.0);
+        // Pace picker for a target below the current weight.
+        let kg_draft: Option<f32> = st.target_kg.trim().replace(',', ".").parse().ok();
+        if let (Some(kg), Some((n, _))) = (kg_draft, data.body_plan(today)) {
+            if let Some(o) = data.body.date_options(&n, kg, today) {
+                let saved = data.body.goal.as_ref().filter(|g| g.reached_on.is_none()).map(|g| (g.target_kg, g.target_date));
+                pace_picker(ui, st, &o, &n, today, saved);
+                ui.add_space(8.0);
+            }
+        }
 
         let Some((n, plan)) = data.body_plan(today) else {
             ui.label(RichText::new("The plan appears once your profile is complete.").color(super::not_logged_color()));
             return;
         };
+        if data.body.goal.is_some() {
+            ui.label(RichText::new("CURRENT PLAN").size(11.5).color(t.text.muted));
+        }
         match (&data.body.goal, plan.mode) {
             (None, _) => {
                 ui.label(format!("No goal set, so your limit is maintenance: {}/day.", kcal(plan.maintenance)));
@@ -316,7 +328,7 @@ fn goal_card(ui: &mut Ui, data: &mut Data, st: &mut BodyUi, today: NaiveDate) {
                     warn(ui, format!("The target date has passed; continuing at the safe pace (−{:.2} kg/week).", plan.kg_per_week));
                 } else if plan.too_fast {
                     ui.horizontal(|ui| {
-                        warn(ui, format!("Faster than 1% of body weight a week ({:.2} kg).", n.weight_kg * body::SAFE_WEEKLY_SHARE));
+                        warn(ui, format!("Faster than recommended (at most a {}/day deficit for you).", kcal(plan.max_deficit)));
                         if let Some(sd) = plan.safe_date {
                             if ui.button(format!("Use {} instead", sd.format("%b %-d, %Y"))).on_hover_text("The earliest date at the safe pace").clicked() {
                                 if let Some(g) = data.body.goal.as_ref() {
@@ -362,6 +374,67 @@ fn goal_card(ui: &mut Ui, data: &mut Data, st: &mut BodyUi, today: NaiveDate) {
             });
         }
     });
+}
+
+/// ASAP and Easy dates with a slider between them; moving it fills in the date field.
+fn pace_picker(ui: &mut Ui, st: &mut BodyUi, o: &body::DateOptions, n: &body::Numbers, today: NaiveDate, saved: Option<(f32, NaiveDate)>) {
+    let t = super::theme::th();
+    let (lo, hi) = ((o.asap - today).num_days(), (o.easy - today).num_days());
+    let draft = crate::parse::parse_date(&st.target_date, today).filter(|d| *d > today);
+    if draft.is_none() && st.target_date.trim().is_empty() {
+        // start in the middle
+        st.target_date = (today + chrono::Duration::days((lo + hi) / 2)).to_string();
+    }
+    let mut days = draft.map_or((lo + hi) / 2, |d| (d - today).num_days()).clamp(lo, hi);
+    let set = |st: &mut BodyUi, d: i64| st.target_date = (today + chrono::Duration::days(d)).to_string();
+    ui.label(RichText::new("Pick a pace").strong());
+    ui.horizontal(|ui| {
+        let end = |ui: &mut Ui, title: &str, date: NaiveDate, deficit: f32, tip: &str| {
+            ui.add(egui::Button::new(RichText::new(format!("{title}\n{}", date.format("%b %-d, %Y"))).size(13.0)))
+            .on_hover_text(format!("{tip}\n{}/day deficit · −{:.2} kg a week", kcal(deficit), deficit * 7.0 / body::KCAL_PER_KG))
+            .clicked()
+        };
+        if end(ui, "ASAP", o.asap, o.asap_deficit, "The largest recommended deficit for you") {
+            set(st, lo);
+        }
+        ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(160.0, 520.0);
+        if hi > lo && ui.add(egui::Slider::new(&mut days, lo..=hi).show_value(false)).changed() {
+            set(st, days);
+        }
+        if end(ui, "Easy", o.easy, o.easy_deficit, "A small deficit most people hardly notice") {
+            set(st, hi);
+        }
+    });
+    let draft_kg: Option<f32> = st.target_kg.trim().replace(',', ".").parse().ok();
+    let draft_date = crate::parse::parse_date(&st.target_date, today);
+    let pending = match (saved, draft_kg, draft_date) {
+        (Some((k, d)), Some(dk), Some(dd)) => (k - dk).abs() > 0.05 || d != dd,
+        (None, Some(_), Some(_)) => true,
+        _ => false,
+    };
+    // what the chosen date means (the plan below already shows a saved goal)
+    if let Some(d) = draft_date.filter(|d| pending && *d > today) {
+        let deficit = o.deficit_for(d, today);
+        let eat = (n.tdee - deficit).max(0.0);
+        let mut text = format!(
+            "{} ({:.0} weeks): −{:.2} kg a week, a {}/day deficit, eat ≈ {}/day",
+            d.format("%b %-d, %Y"),
+            (d - today).num_days() as f32 / 7.0,
+            deficit * 7.0 / body::KCAL_PER_KG,
+            kcal(deficit),
+            kcal(eat)
+        );
+        let color = if deficit > o.asap_deficit + 1.0 {
+            text += " · faster than recommended";
+            t.status.warning
+        } else {
+            t.text.muted
+        };
+        ui.label(RichText::new(text).color(color).size(13.0));
+    }
+    if pending {
+        ui.label(RichText::new("Not saved yet: press the goal button above to use it.").color(t.status.warning).size(12.0));
+    }
 }
 
 fn limit_card(ui: &mut Ui, data: &mut Data, from_plan: Option<u32>) {

@@ -32,8 +32,10 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
     height
 
   Set a **goal weight and date** and it works out the daily deficit (≈7700 kcal per kg) and the
-  calories to eat. It warns when the pace is faster than 1% of body weight a week (with a
-  one-click "earliest safe date") and never goes under 1500 kcal (1200 for women). A target at
+  calories to eat. To help pick the date it offers **ASAP** (the largest recommended deficit:
+  the smallest of 1000 kcal/day, 1% of body weight a week, and what keeps you above 1500 kcal,
+  or 1200 for women), **Easy** (a 300 kcal/day deficit) and a slider between them that shows
+  the weekly loss and calories for each date. A date faster than ASAP gets a warning. A target at
   or above your weight means maintenance for that weight. Calculations use your 7-day average
   weight, so daily water swings don't move the plan. Once you have 2+ weeks of calories and
   weigh-ins, **measured burn** shows what your own logs say you burn.

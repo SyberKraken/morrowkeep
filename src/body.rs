@@ -13,6 +13,10 @@ pub const KCAL_PER_KG: f32 = 7700.0;
 pub const SAFE_WEEKLY_SHARE: f32 = 0.01;
 /// Pace used when a goal has no date: kg per week.
 pub const DEFAULT_KG_PER_WEEK: f32 = 0.5;
+/// Largest daily deficit recommended, whatever the other limits allow.
+pub const MAX_DEFICIT_KCAL: f32 = 1000.0;
+/// A deficit most people hardly notice (about 0.27 kg a week).
+pub const EASY_DEFICIT_KCAL: f32 = 300.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -111,6 +115,23 @@ impl Default for Body {
     }
 }
 
+/// Dates to reach a target at the fastest recommended and at an easy pace.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DateOptions {
+    pub asap: NaiveDate,
+    pub asap_deficit: f32,
+    pub easy: NaiveDate,
+    pub easy_deficit: f32,
+    pub kg_left: f32,
+}
+
+impl DateOptions {
+    /// Daily deficit needed to arrive on `date`.
+    pub fn deficit_for(&self, date: NaiveDate, today: NaiveDate) -> f32 {
+        self.kg_left * KCAL_PER_KG / (date - today).num_days().max(1) as f32
+    }
+}
+
 /// The derived numbers for a complete profile.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Numbers {
@@ -144,8 +165,9 @@ pub struct Plan {
     pub kg_left: f32,
     pub kg_per_week: f32,
     pub days_left: i64,
-    /// Loss faster than SAFE_WEEKLY_SHARE of body weight per week.
+    /// Deficit larger than `max_deficit`.
     pub too_fast: bool,
+    pub max_deficit: f32,
     /// Earliest date reachable at the safe pace.
     pub safe_date: Option<NaiveDate>,
     /// The deficit would put you under the calorie floor, so the limit was raised to it.
@@ -217,6 +239,28 @@ impl Body {
         })
     }
 
+    /// The largest recommended daily deficit: the smallest of MAX_DEFICIT_KCAL, losing
+    /// SAFE_WEEKLY_SHARE of body weight a week, and what keeps you above the calorie floor.
+    /// Never below 100, so a date can always be worked out.
+    pub fn max_deficit(&self, n: &Numbers) -> f32 {
+        let by_share = n.weight_kg * SAFE_WEEKLY_SHARE * KCAL_PER_KG / 7.0;
+        let by_floor = n.tdee - self.calorie_floor() as f32;
+        MAX_DEFICIT_KCAL.min(by_share).min(by_floor).max(100.0)
+    }
+
+    /// The pace range for losing down to `target_kg`: the ASAP date (largest recommended
+    /// deficit) and an easy one. None when the target isn't below the current weight.
+    pub fn date_options(&self, n: &Numbers, target_kg: f32, today: NaiveDate) -> Option<DateOptions> {
+        let kg_left = n.weight_kg - target_kg;
+        if kg_left <= 0.0 {
+            return None;
+        }
+        let fast = self.max_deficit(n);
+        let easy = EASY_DEFICIT_KCAL.min(fast * 0.6);
+        let date_for = |deficit: f32| today + Duration::days(((kg_left * KCAL_PER_KG / deficit) - 1e-3).ceil().max(1.0) as i64);
+        Some(DateOptions { asap: date_for(fast), asap_deficit: fast, easy: date_for(easy), easy_deficit: easy, kg_left })
+    }
+
     fn calorie_floor(&self) -> u32 {
         match self.sex {
             Some(Sex::Female) => 1200,
@@ -239,6 +283,7 @@ impl Body {
                 kg_per_week: 0.0,
                 days_left: 0,
                 too_fast: false,
+                max_deficit: 0.0,
                 safe_date: None,
                 floored: false,
                 floor,
@@ -251,8 +296,8 @@ impl Body {
             return maintain(goal.target_kg);
         }
         let kg_left = n.weight_kg - goal.target_kg;
-        let safe_per_week = n.weight_kg * SAFE_WEEKLY_SHARE;
-        let safe_date = day + Duration::days((kg_left / safe_per_week * 7.0 - 1e-3).ceil() as i64);
+        let max_deficit = self.max_deficit(n);
+        let safe_date = day + Duration::days((kg_left * KCAL_PER_KG / max_deficit - 1e-3).ceil() as i64);
         let days = (goal.target_date - day).num_days();
         let date_passed = days <= 0;
         // A date in the past: keep going at the safe pace.
@@ -268,7 +313,8 @@ impl Body {
             kg_left,
             kg_per_week,
             days_left,
-            too_fast: kg_per_week > safe_per_week + 0.005,
+            too_fast: deficit > max_deficit + 1.0,
+            max_deficit,
             safe_date: Some(safe_date),
             floored: raw < floor as f32,
             floor,
@@ -441,7 +487,14 @@ mod tests {
         let p = b.plan(&n, today);
         assert!(p.too_fast && p.floored);
         assert_eq!(p.daily, 1500);
-        assert_eq!(p.safe_date, Some(today + Duration::days(35))); // 4 kg at 0.8 kg/week
+        // max deficit: min(1000, 1% = 880, 2142 - 1500 = 642) = 642 → 4 × 7700 / 642 = 48 days
+        assert!((p.max_deficit - 642.0).abs() < 0.5);
+        assert_eq!(p.safe_date, Some(today + Duration::days(48)));
+        let o = b.date_options(&n, 76.0, today).unwrap();
+        assert_eq!(o.asap, today + Duration::days(48));
+        assert_eq!(o.easy, today + Duration::days(103)); // 30800 / 300 = 102.7
+        assert!((o.deficit_for(today + Duration::days(70), today) - 440.0).abs() < 0.01);
+        assert!(b.date_options(&n, 81.0, today).is_none());
         // date in the past: continue at the safe pace
         b.goal.as_mut().unwrap().target_date = today - Duration::days(1);
         let p = b.plan(&n, today);
