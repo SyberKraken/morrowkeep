@@ -76,13 +76,15 @@ fn lighten(c: Color32, t: f32) -> Color32 {
     Color32::from_rgb(l(c.r()), l(c.g()), l(c.b()))
 }
 
-/// Occurrence states of a repeating item in [from, to], streak lengths filled in.
-fn history(item: &Item, from: NaiveDate, to: NaiveDate, today: NaiveDate) -> Vec<(NaiveDate, State, u32)> {
+/// Occurrence states of a repeating item from its start (at most two years back) up to `to`,
+/// streak lengths filled in. Streaks are counted over the whole history so they're true no
+/// matter how short the period on screen is; callers drop what's before their window.
+fn history(item: &Item, to: NaiveDate, today: NaiveDate) -> Vec<(NaiveDate, State, u32)> {
     let (Some(rule), Some(start)) = (item.repeat_rule(), item.date) else { return Vec::new() };
     let last = item.until.map_or(to, |u| u.min(to)).min(today);
     let mut out = Vec::new();
     let mut run = 0;
-    let mut d = from.max(start);
+    let mut d = start.max(today - Duration::days(730));
     while d <= last {
         if rule.occurs_on(start, d) {
             let state = if item.done_dates.contains(&d) {
@@ -335,8 +337,9 @@ pub fn streaks_section(ui: &mut Ui, data: &Data, period_days: i64) {
     let grid = ui.visuals().widgets.noninteractive.bg_stroke.color;
 
     for item in recurring {
-        let h = history(item, from, today, today);
-        let (current, best) = streak_stats(&h);
+        let full = history(item, today, today);
+        let (current, best) = streak_stats(&full);
+        let h: Vec<_> = full.into_iter().filter(|(d, _, _)| *d >= from).collect();
         let (row, resp) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
         let painter = ui.painter_at(row);
         let color = kind_color(&item.kind);
@@ -416,43 +419,116 @@ pub fn streaks_section(ui: &mut Ui, data: &Data, period_days: i64) {
     }
 }
 
-/// Mini constellation of one day's tasks, for a calendar month cell: lit dots (connected)
-/// for done, hollow for missed or still open, plus a gold star when everything was done.
-pub fn day_stars(p: &Painter, strip: Rect, data: &Data, day: NaiveDate, today: NaiveDate, faint: Color32) {
-    // (done, color) for every task due that day, plus one-offs finished that day
-    let mut dots: Vec<(bool, Color32)> = Vec::new();
+/// What a task looks like on a given day: done, missed (past, not done) or open
+/// (today/upcoming, not done yet).
+#[derive(Clone, Copy, PartialEq)]
+pub enum DayState {
+    Done,
+    Missed,
+    Open,
+}
+
+/// Every task due on `day` (plus one-offs finished that day), done ones first so the lit part
+/// reads as one connected figure: (state, color, item index).
+pub fn day_tasks(data: &Data, day: NaiveDate, today: NaiveDate) -> Vec<(DayState, Color32, usize)> {
+    let mut v: Vec<(DayState, Color32, usize)> = Vec::new();
     for (_, idx) in occurrences(&data.items, day, day) {
         let it = &data.items[idx];
         let done = if it.repeat.is_some() { it.done_dates.contains(&day) } else { it.done };
-        dots.push((done, kind_color(&it.kind)));
+        let state = if done {
+            DayState::Done
+        } else if day < today {
+            DayState::Missed
+        } else {
+            DayState::Open
+        };
+        v.push((state, kind_color(&it.kind), idx));
     }
-    for it in data.items.iter().filter(|i| i.completed_on() == Some(day) && i.date != Some(day)) {
-        dots.push((true, kind_color(&it.kind)));
+    for (idx, it) in data.items.iter().enumerate() {
+        if it.completed_on() == Some(day) && it.date != Some(day) {
+            v.push((DayState::Done, kind_color(&it.kind), idx));
+        }
     }
-    if dots.is_empty() || day > today {
+    v.sort_by_key(|(s, _, _)| *s != DayState::Done);
+    v
+}
+
+/// A day's tasks as a compact constellation filling `area` (calendar month cells): lit dots
+/// joined up for done, grey rings for missed, faint colored rings for still open, and a gold
+/// star when everything due was done. Wraps onto more rows when the cell is narrow.
+pub fn day_stars(p: &Painter, area: Rect, data: &Data, day: NaiveDate, today: NaiveDate, faint: Color32) {
+    let tasks = day_tasks(data, day, today);
+    let n = tasks.len();
+    if n == 0 || area.height() < 8.0 {
         return;
     }
-    // done first, so the lit part reads as one connected figure
-    dots.sort_by_key(|(d, _)| !*d);
-    let step = 8.0;
-    let max = (((strip.width() - 16.0) / step) as usize).max(1);
-    let pts: Vec<Pos2> = (0..dots.len().min(max))
-        .map(|k| Pos2::new(strip.left() + 6.0 + step * k as f32, strip.center().y + if k % 2 == 0 { -2.0 } else { 2.0 }))
+    let all_done = tasks.iter().all(|(s, _, _)| *s == DayState::Done);
+    let r = (area.height() * 0.16).clamp(2.6, 5.0);
+    let step = r * 3.4;
+    let usable_w = area.width() - 8.0 - if all_done { step * 1.5 } else { 0.0 };
+    let per_row = ((usable_w / step).floor() as usize).max(1);
+    let rows = n.div_ceil(per_row);
+    let row_h = (area.height() / rows as f32).min(r * 5.0);
+    let top = area.center().y - row_h * rows as f32 / 2.0;
+    let pts: Vec<Pos2> = (0..n)
+        .map(|k| {
+            let (row, col) = (k / per_row, k % per_row);
+            let zig = if col % 2 == 0 { -0.7 } else { 0.7 } * r;
+            Pos2::new(area.left() + 4.0 + r + step * col as f32, top + row_h * (row as f32 + 0.5) + zig)
+        })
         .collect();
-    for k in 1..pts.len() {
-        if dots[k - 1].0 && dots[k].0 {
-            p.line_segment([pts[k - 1], pts[k]], Stroke::new(1.0, with_alpha(dots[k].1, 0.8)));
+    for k in 1..n {
+        let same_row = k % per_row != 0;
+        if same_row && tasks[k - 1].0 == DayState::Done && tasks[k].0 == DayState::Done {
+            p.line_segment([pts[k - 1], pts[k]], Stroke::new((r * 0.35).max(1.0), with_alpha(tasks[k].1, 0.8)));
         }
     }
-    for (k, pos) in pts.iter().enumerate() {
-        let (done, c) = dots[k];
-        if done {
-            p.circle_filled(*pos, 2.4, c);
-        } else {
-            p.circle_stroke(*pos, 2.0, Stroke::new(1.0, faint));
+    for (k, (state, c, _)) in tasks.iter().enumerate() {
+        match state {
+            DayState::Done => {
+                p.circle_filled(pts[k], r * 1.8, with_alpha(*c, 0.15));
+                p.circle_filled(pts[k], r, *c);
+            }
+            DayState::Missed => {
+                p.circle_stroke(pts[k], r * 0.8, Stroke::new(1.0, faint));
+            }
+            DayState::Open => {
+                p.circle_stroke(pts[k], r * 0.8, Stroke::new(1.0, with_alpha(*c, 0.55)));
+            }
         }
     }
-    if dots.iter().all(|(d, _)| *d) {
-        four_point_star(p, Pos2::new(strip.right() - 7.0, strip.center().y), 6.0, GOLD);
+    if all_done {
+        let last = pts[n - 1];
+        four_point_star(p, Pos2::new(last.x + step * 1.2, last.y), r * 2.0, GOLD);
+    }
+}
+
+/// The gold "everything done" star.
+pub fn gold_star(p: &Painter, c: Pos2, r: f32) {
+    p.circle_filled(c, r * 1.3, with_alpha(GOLD, 0.18));
+    four_point_star(p, c, r, GOLD);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streaks_count_beyond_the_visible_window() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 10).unwrap();
+        let mut item = Item::new("Run");
+        item.date = Some(today - Duration::days(20));
+        item.repeat = Some("daily".into());
+        // done the last 12 days before today, missed the day before that; today still open
+        item.done_dates = (1..=12).map(|k| today - Duration::days(k)).collect();
+        let full = history(&item, today, today);
+        let (current, best) = streak_stats(&full);
+        assert_eq!((current, best), (12, 12));
+        // a 7-day window still shows the true streak length on its nodes
+        let from = today - Duration::days(6);
+        let window: Vec<_> = full.iter().filter(|(d, _, _)| *d >= from).collect();
+        assert_eq!(window.first().unwrap().2, 7); // Oct 4 is day 7 of the streak
+        assert!(window.last().unwrap().1 == State::Pending); // today, not done yet
+        assert!(full.iter().any(|(_, s, _)| *s == State::Missed));
     }
 }

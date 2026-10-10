@@ -41,10 +41,13 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   - other: a constellation with a 4-point star every 7th day
 
   Missed days are hollow rings, and today pulses until done. One-off tasks appear as small stars
-  on the day they were finished. Calendar month cells show each day's tasks as a mini
-  constellation, with a gold star when everything was done.
+  on the day they were finished.
+- **Calendar as a star map.** Each month cell is that day's constellation: done tasks lit and
+  joined, missed ones as grey rings, upcoming ones as faint rings, and a gold star when everything
+  was done. Only tasks with a time are listed as text. The day panel shows the day's anytime
+  tasks as a vertical constellation (click a star to tick it off).
 - **Charts tab.** A weight line chart and a calories-per-day bar chart (with your daily limit as a
-  dashed line), over Month / 3 months / 6 months / Year. Hover for exact values.
+  dashed line), over Week / Month / 3 months / 6 months / Year. Hover for exact values.
 - **Reminders.** Windows notifications, also while Morrowkeep is in the tray: unfinished "anytime"
   items for today, no calories logged after 18:00, and no weight logged after 10:00. At most one
   every 60 minutes, with quiet hours (22:00–08:00).

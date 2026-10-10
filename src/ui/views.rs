@@ -157,9 +157,80 @@ fn day_list(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Action>)
     if untimed.is_empty() {
         ui.label(RichText::new("Nothing here").weak());
     }
-    for e in &untimed {
-        entry_row(ui, data, *e, day, actions);
+    vertical_constellation(ui, data, day, &untimed, actions);
+}
+
+/// The day's anytime tasks as a vertical constellation: one star per task, stacked, with its
+/// name beside it. Lit and joined when done; click to tick off, right-click to edit.
+fn vertical_constellation(ui: &mut Ui, data: &Data, day: NaiveDate, entries: &[Entry], actions: &mut Vec<Action>) {
+    let today = Local::now().date_naive();
+    let row_h = 30.0;
+    let x_off = 16.0;
+    let faint = ui.visuals().weak_text_color();
+    let mut prev: Option<(Pos2, bool, Color32)> = None;
+    let mut all_done = true;
+    let mut any = false;
+    for e in entries {
+        let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::click());
+        let node = Pos2::new(rect.left() + x_off, rect.center().y);
+        let painter = ui.painter();
+        match *e {
+            Entry::Item(idx) => {
+                any = true;
+                let item = &data.items[idx];
+                let color = kind_color(&item.kind);
+                let done = item.is_done_on(day);
+                all_done &= done;
+                if let Some((p, pd, _)) = prev {
+                    let (w, c) = if pd && done { (2.5, color.linear_multiply(0.8)) } else { (1.0, faint.linear_multiply(0.4)) };
+                    painter.line_segment([p, node], Stroke::new(w, c));
+                }
+                if resp.hovered() {
+                    painter.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+                }
+                if done {
+                    painter.circle_filled(node, 12.0, color.linear_multiply(0.15));
+                    painter.circle_filled(node, 7.0, color);
+                } else if day < today {
+                    painter.circle_stroke(node, 5.5, Stroke::new(1.4, faint));
+                } else {
+                    painter.circle_stroke(node, 5.5, Stroke::new(1.6, color));
+                }
+                let ink = if done { ui.visuals().text_color() } else if day < today { faint } else { ui.visuals().text_color() };
+                let galley = painter.layout_no_wrap(item.title.clone(), FontId::proportional(14.5), ink);
+                let text_pos = Pos2::new(rect.left() + x_off + 18.0, rect.center().y - galley.size().y / 2.0);
+                painter.galley(text_pos, galley, ink);
+                painter.text(rect.right_center() - Vec2::new(6.0, 0.0), Align2::RIGHT_CENTER, &item.kind, FontId::proportional(11.5), color);
+                if resp.clicked() {
+                    actions.push(Action::Toggle(item.id.clone(), day));
+                } else if resp.secondary_clicked() {
+                    actions.push(Action::Edit(item.id.clone()));
+                }
+                resp.on_hover_text(if done { "Click to un-tick · right-click to edit" } else { "Click to tick off · right-click to edit" });
+                prev = Some((node, done, color));
+            }
+            Entry::Ext(i) => {
+                // all-day Google event: not a task, shown as a small grey diamond
+                let ev = &data.gcache[i];
+                four_diamond(painter, node, 5.0, GOOGLE_COLOR);
+                painter.text(Pos2::new(rect.left() + x_off + 18.0, rect.center().y), Align2::LEFT_CENTER, &ev.title, FontId::proportional(14.0), GOOGLE_COLOR);
+            }
+        }
     }
+    if any && all_done {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::hover());
+        let node = Pos2::new(rect.left() + x_off, rect.center().y);
+        super::streaks::gold_star(ui.painter(), node, 10.0);
+        ui.painter().text(Pos2::new(rect.left() + x_off + 18.0, rect.center().y), Align2::LEFT_CENTER, "All done", FontId::proportional(14.0), super::streaks::GOLD);
+    }
+}
+
+fn four_diamond(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
+    p.add(egui::Shape::convex_polygon(
+        vec![c + Vec2::new(0.0, -r), c + Vec2::new(r, 0.0), c + Vec2::new(0.0, r), c + Vec2::new(-r, 0.0)],
+        color,
+        Stroke::NONE,
+    ));
 }
 
 fn now_line(ui: &mut Ui) {
@@ -548,17 +619,18 @@ pub fn month(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, a
     let grid_end = grid_start + Duration::days(41);
     let today = Local::now().date_naive();
 
+    // Only tasks with a time are listed as text; everything else lives in the constellation.
     let mut by_day: HashMap<NaiveDate, Vec<(Option<NaiveTime>, String, Color32, bool)>> = HashMap::new();
     for (d, idx) in occurrences(&data.items, grid_start, grid_end) {
         let it = &data.items[idx];
-        by_day.entry(d).or_default().push((it.time, it.title.clone(), kind_color(&it.kind), it.is_done_on(d)));
+        if it.time.is_some() {
+            by_day.entry(d).or_default().push((it.time, it.title.clone(), kind_color(&it.kind), it.is_done_on(d)));
+        }
     }
     for ev in &data.gcache {
-        let mut d = ev.start.date().max(grid_start);
-        while d <= grid_end && ev.on_day(d) {
-            let t = (!ev.all_day && ev.start.date() == d).then(|| ev.start.time());
-            by_day.entry(d).or_default().push((t, ev.title.clone(), GOOGLE_COLOR, false));
-            d += Duration::days(1);
+        let d = ev.start.date();
+        if !ev.all_day && d >= grid_start && d <= grid_end {
+            by_day.entry(d).or_default().push((Some(ev.start.time()), ev.title.clone(), GOOGLE_COLOR, false));
         }
     }
     for v in by_day.values_mut() {
@@ -614,11 +686,13 @@ pub fn month(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, a
             painter.text(cell.right_top() + Vec2::new(-6.0, 5.0), Align2::RIGHT_TOP, "not logged", FontId::proportional(11.0), NOT_LOGGED_COLOR);
         }
 
-        // that day's mini constellation along the bottom edge
-        let strip = Rect::from_min_max(Pos2::new(cell.left() + 2.0, cell.bottom() - 13.0), Pos2::new(cell.right() - 2.0, cell.bottom() - 1.0));
-        super::streaks::day_stars(&painter, strip, data, day, today, visuals.weak_text_color());
+        // Timed tasks as text (at most 2 lines), then the day's constellation fills the rest.
+        let timed_lines = by_day.get(&day).map_or(0, |l| l.len().min(2));
+        let stars_top = cell.top() + 22.0 + timed_lines as f32 * line_h;
+        let stars = Rect::from_min_max(Pos2::new(cell.left() + 2.0, stars_top), Pos2::new(cell.right() - 2.0, cell.bottom() - 3.0));
+        super::streaks::day_stars(&painter, stars, data, day, today, visuals.weak_text_color());
         if let Some(list) = by_day.get(&day) {
-            let max_lines = (((cell.height() - 37.0) / line_h).floor() as usize).max(1);
+            let max_lines = 2;
             let shown = if list.len() > max_lines { max_lines - 1 } else { list.len() };
             let clip = painter.with_clip_rect(cell);
             for (k, (t, title, color, done)) in list.iter().take(shown).enumerate() {

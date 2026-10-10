@@ -11,6 +11,7 @@ pub const WEIGHT_COLOR: Color32 = Color32::from_rgb(70, 140, 230);
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Period {
+    Week,
     Month,
     ThreeMonths,
     SixMonths,
@@ -18,10 +19,11 @@ pub enum Period {
 }
 
 impl Period {
-    const ALL: [Period; 4] = [Period::Month, Period::ThreeMonths, Period::SixMonths, Period::Year];
+    const ALL: [Period; 5] = [Period::Week, Period::Month, Period::ThreeMonths, Period::SixMonths, Period::Year];
 
     fn label(self) -> &'static str {
         match self {
+            Period::Week => "Week",
             Period::Month => "Month",
             Period::ThreeMonths => "3 months",
             Period::SixMonths => "6 months",
@@ -31,6 +33,7 @@ impl Period {
 
     fn days(self) -> i64 {
         match self {
+            Period::Week => 7,
             Period::Month => 30,
             Period::ThreeMonths => 91,
             Period::SixMonths => 182,
@@ -54,7 +57,14 @@ fn date_grid(input: GridInput) -> Vec<GridMark> {
     let span = hi - lo;
     let (Some(start), Some(end)) = (date(lo.floor()), date(hi.ceil())) else { return Vec::new() };
     let mut marks = Vec::new();
-    if span <= 45.0 {
+    if span <= 12.0 {
+        // every day
+        let mut d = start;
+        while d <= end {
+            marks.push(GridMark { value: x(d), step_size: 1.0 });
+            d += Duration::days(1);
+        }
+    } else if span <= 45.0 {
         // Mondays
         let mut d = start + Duration::days((7 - start.weekday().num_days_from_monday() as i64) % 7);
         while d <= end {
@@ -82,6 +92,7 @@ fn date_grid(input: GridInput) -> Vec<GridMark> {
 
 fn axis_label(mark: GridMark, span: f64) -> String {
     match date(mark.value) {
+        Some(d) if span <= 12.0 => d.format("%a %-d").to_string(),
         Some(d) if span <= 45.0 => d.format("%b %-d").to_string(),
         Some(d) if d.month() == 1 => d.format("%b %Y").to_string(),
         Some(d) => d.format("%b").to_string(),
