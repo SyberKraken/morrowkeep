@@ -1,5 +1,6 @@
 //! Today view, day list, month grid and week timeline.
 
+use super::board::{anytime_board, BoardState};
 use super::charts::WEIGHT_COLOR;
 use super::{kind_color, schedule_text, Action, CalMode, CalorieInput, CALORIE_COLOR, CLAUDE_COLOR, GOOGLE_COLOR, NOT_LOGGED_COLOR};
 use crate::model::occurrences;
@@ -127,7 +128,8 @@ fn section(ui: &mut Ui, title: &str, count: usize) {
 }
 
 /// Entries for a single day; used by both Today and the calendar's side panel.
-fn day_list(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Action>) {
+/// `untimed_as_list`: false on Today, where the anytime items are the quest board instead.
+fn day_list(ui: &mut Ui, data: &Data, day: NaiveDate, untimed_as_list: bool, actions: &mut Vec<Action>) {
     let (timed, untimed) = entries_for(data, day);
     let now = Local::now().naive_local();
     let is_today = day == now.date();
@@ -152,6 +154,9 @@ fn day_list(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Action>)
         now_line(ui);
     }
 
+    if !untimed_as_list {
+        return;
+    }
     section(ui, if is_today { "ANYTIME TODAY" } else { "ANYTIME" }, untimed.len());
     if untimed.is_empty() {
         ui.label(RichText::new("Nothing here").weak());
@@ -199,6 +204,7 @@ fn calorie_list(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Acti
 }
 
 /// Big daily total, manual quick-add, and "describe what you ate" for Claude.
+/// Laid out for the narrow right-hand panel of the Today view.
 fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, claude_busy: bool, actions: &mut Vec<Action>) {
     let today = Local::now().date_naive();
     let total = data.calories_on(today);
@@ -212,40 +218,44 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, claude_busy:
             ui.horizontal(|ui| {
                 ui.label(RichText::new(total.to_string()).size(46.0).strong().color(CALORIE_COLOR));
                 ui.vertical(|ui| {
-                    ui.add_space(12.0);
+                    ui.add_space(14.0);
                     ui.label(RichText::new("kcal today").size(16.0));
                 });
-                if let Some(rec) = data.recommended_for(today) {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.vertical(|ui| {
-                            let left = rec as i64 - total as i64;
-                            let (text, color) = if rec == 0 {
-                                ("This month's budget is used up".to_string(), Color32::from_rgb(220, 80, 60))
-                            } else if left >= 0 {
-                                (format!("{left} kcal left today"), CALORIE_COLOR)
-                            } else {
-                                (format!("{} kcal over today", -left), Color32::from_rgb(220, 80, 60))
-                            };
-                            let frac = if rec == 0 { 1.0 } else { (total as f32 / rec as f32).min(1.0) };
-                            ui.label(RichText::new(text).size(18.0).strong().color(color));
-                            ui.add(egui::ProgressBar::new(frac).desired_width(240.0).fill(color.linear_multiply(0.8)));
-                            ui.label(RichText::new(format!("Recommended today: {rec} kcal")).weak().size(12.5))
-                                .on_hover_text("What's left of this month's calorie budget, spread over the days left in the month. Going over one day lowers the next days.");
-                        });
-                    });
-                }
             });
+            if let Some(rec) = data.recommended_for(today) {
+                let left = rec as i64 - total as i64;
+                let (text, color) = if rec == 0 {
+                    ("This month's budget is used up".to_string(), Color32::from_rgb(220, 80, 60))
+                } else if left >= 0 {
+                    (format!("{left} kcal left today"), CALORIE_COLOR)
+                } else {
+                    (format!("{} kcal over today", -left), Color32::from_rgb(220, 80, 60))
+                };
+                let frac = if rec == 0 { 1.0 } else { (total as f32 / rec as f32).min(1.0) };
+                ui.label(RichText::new(text).size(18.0).strong().color(color));
+                ui.add(egui::ProgressBar::new(frac).desired_width(ui.available_width()).fill(color.linear_multiply(0.8)));
+                ui.label(RichText::new(format!("Recommended today: {rec} kcal")).weak().size(12.5))
+                    .on_hover_text("What's left of this month's calorie budget, spread over the days left in the month. Going over one day lowers the next days.");
+            }
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
-                let k = ui.add(egui::TextEdit::singleline(&mut input.kcal).desired_width(70.0).hint_text("kcal"));
-                ui.add(egui::TextEdit::singleline(&mut input.what).desired_width(220.0).hint_text("what was it? (optional)"));
+                let k = ui.add(egui::TextEdit::singleline(&mut input.kcal).desired_width(64.0).hint_text("kcal"));
                 let kcal: Option<u32> = input.kcal.trim().parse().ok().filter(|n| *n > 0 && *n <= 20000);
                 let enter = k.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.add_enabled(kcal.is_some(), egui::Button::new(RichText::new("+ Add").strong())).clicked() || (enter && kcal.is_some()) {
-                    actions.push(Action::AddCalories(kcal.unwrap(), input.what.trim().to_string()));
-                    input.kcal.clear();
-                    input.what.clear();
-                }
-                ui.separator();
+                // Button first (right-aligned), then the text field takes exactly what's left.
+                // Sizing the field from available width before placing the button would
+                // overshoot and make the resizable panel creep wider every frame.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add_enabled(kcal.is_some(), egui::Button::new(RichText::new("+ Add").strong())).clicked() || (enter && kcal.is_some()) {
+                        actions.push(Action::AddCalories(kcal.unwrap(), input.what.trim().to_string()));
+                        input.kcal.clear();
+                        input.what.clear();
+                    }
+                    ui.add(egui::TextEdit::singleline(&mut input.what).desired_width(ui.available_width()).hint_text("what was it? (optional)"));
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Quick:").weak());
                 for n in [100, 250, 500] {
                     if ui.button(format!("+{n}")).on_hover_text(format!("Log {n} kcal right now")).clicked() {
                         actions.push(Action::AddCalories(n, input.what.trim().to_string()));
@@ -253,26 +263,29 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, claude_busy:
                     }
                 }
             });
-            ui.horizontal(|ui| {
-                let btn_w = 170.0;
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut input.food)
-                        .desired_width(ui.available_width() - btn_w)
-                        .hint_text("Describe what you ate… e.g. \"chicken burrito and a coke\" or \"200g pasta with pesto\""),
-                );
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let can = !input.food.trim().is_empty() && !claude_busy;
-                if ui
-                    .add_enabled(can, egui::Button::new(RichText::new("Estimate with Claude").color(CLAUDE_COLOR)))
-                    .on_hover_text("Claude estimates on the high side; you review before it's logged")
-                    .clicked()
-                    || (enter && can)
-                {
-                    actions.push(Action::EstimateFood(input.food.trim().to_string()));
-                }
-            });
+            ui.add_space(4.0);
+            let r = ui.add(
+                egui::TextEdit::multiline(&mut input.food)
+                    .desired_rows(2)
+                    .desired_width(ui.available_width())
+                    .hint_text("Describe what you ate… e.g. \"chicken burrito and a coke\" or \"200g pasta with pesto\""),
+            );
+            // Enter estimates; Shift+Enter makes a new line
+            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+            if enter {
+                input.food = input.food.trim_end_matches('\n').to_string();
+            }
+            let can = !input.food.trim().is_empty() && !claude_busy;
+            if ui
+                .add_enabled(can, egui::Button::new(RichText::new("Estimate with Claude").color(CLAUDE_COLOR)))
+                .on_hover_text("Claude estimates on the high side; you review before it's logged")
+                .clicked()
+                || (enter && can)
+            {
+                actions.push(Action::EstimateFood(input.food.trim().to_string()));
+            }
             if data.calories.iter().any(|c| c.date == today) {
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 calorie_list(ui, data, today, actions);
             }
         });
@@ -286,14 +299,39 @@ fn weight_row(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut 
     egui::Frame::default()
         .fill(ui.visuals().faint_bg_color)
         .stroke(Stroke::new(1.0, WEIGHT_COLOR.linear_multiply(0.6)))
-        .inner_margin(egui::Margin::symmetric(12, 8))
+        .inner_margin(12.0)
         .corner_radius(8.0)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Weight").size(16.0).strong());
+                if today_kg.is_some() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("✖").on_hover_text("Remove today's weight").clicked() {
+                            actions.push(Action::SetWeight(None));
+                        }
+                    });
+                }
+            });
+            match (today_kg, previous) {
+                (Some(k), p) => {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{k:.1} kg")).size(26.0).strong().color(WEIGHT_COLOR));
+                        if let Some(p) = p {
+                            ui.label(RichText::new(format!("{:+.1} kg since {}", k - p.kg, p.date.format("%b %-d"))).weak());
+                        }
+                    });
+                }
+                (None, Some(p)) => {
+                    ui.label(RichText::new(format!("Not weighed today · last {:.1} kg on {}", p.kg, p.date.format("%b %-d"))).color(NOT_LOGGED_COLOR));
+                }
+                (None, None) => {
+                    ui.label(RichText::new("Not weighed today").color(NOT_LOGGED_COLOR));
+                }
+            }
+            ui.horizontal(|ui| {
                 let hint = today_kg.or(previous.map(|p| p.kg)).map(|k| format!("{k:.1}")).unwrap_or_else(|| "kg".into());
-                let r = ui.add(egui::TextEdit::singleline(&mut input.weight).desired_width(64.0).hint_text(hint));
+                let r = ui.add(egui::TextEdit::singleline(&mut input.weight).desired_width(70.0).hint_text(hint));
                 ui.label("kg");
                 // accept "82,4" as well as "82.4"
                 let kg: Option<f32> = input.weight.trim().replace(',', ".").parse().ok().filter(|k| (20.0..=400.0).contains(k));
@@ -303,37 +341,26 @@ fn weight_row(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut 
                     actions.push(Action::SetWeight(kg));
                     input.weight.clear();
                 }
-                ui.add_space(8.0);
-                match (today_kg, previous) {
-                    (Some(k), Some(p)) => {
-                        ui.label(RichText::new(format!("{k:.1} kg today")).strong().color(WEIGHT_COLOR));
-                        ui.label(RichText::new(format!("{:+.1} kg since {}", k - p.kg, p.date.format("%b %-d"))).weak());
-                    }
-                    (Some(k), None) => {
-                        ui.label(RichText::new(format!("{k:.1} kg today")).strong().color(WEIGHT_COLOR));
-                    }
-                    (None, Some(p)) => {
-                        ui.label(RichText::new(format!("Not weighed today · last {:.1} kg on {}", p.kg, p.date.format("%b %-d"))).color(NOT_LOGGED_COLOR));
-                    }
-                    (None, None) => {
-                        ui.label(RichText::new("Not weighed today").color(NOT_LOGGED_COLOR));
-                    }
-                }
-                if today_kg.is_some() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✖").on_hover_text("Remove today's weight").clicked() {
-                            actions.push(Action::SetWeight(None));
-                        }
-                    });
-                }
             });
         });
 }
 
-pub fn today(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, claude_busy: bool, actions: &mut Vec<Action>) {
+/// Right-hand panel of the Today view: calorie and weight entry.
+pub fn today_side(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, claude_busy: bool, actions: &mut Vec<Action>) {
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.add_space(10.0);
+        calorie_card(ui, data, cal, claude_busy, actions);
+        ui.add_space(10.0);
+        weight_row(ui, data, cal, actions);
+        ui.add_space(10.0);
+    });
+}
+
+/// Main area of the Today view: header, quest board, overdue, schedule and backlog.
+/// Fills the window; the board's tiles scale with its width.
+pub fn today(ui: &mut Ui, data: &Data, board: &mut BoardState, actions: &mut Vec<Action>) {
     let today = Local::now().date_naive();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.set_max_width(900.0);
         ui.add_space(8.0);
         let (timed, untimed) = entries_for(data, today);
         let items: Vec<usize> = timed
@@ -342,22 +369,32 @@ pub fn today(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, claude_busy: bool
             .filter_map(|e| if let Entry::Item(i) = e { Some(*i) } else { None })
             .collect();
         let done = items.iter().filter(|i| data.items[**i].is_done_on(today)).count();
-        ui.horizontal(|ui| {
-            ui.heading(today.format("%A, %B %-d").to_string());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !items.is_empty() {
-                    ui.add(
-                        egui::ProgressBar::new(done as f32 / items.len() as f32)
-                            .desired_width(160.0)
-                            .text(format!("{done}/{} done", items.len())),
-                    );
-                }
-            });
+        let progress = (!items.is_empty()).then(|| {
+            egui::ProgressBar::new(done as f32 / items.len() as f32)
+                .desired_width(160.0)
+                .text(format!("{done}/{} done", items.len()))
         });
-        ui.add_space(6.0);
-        calorie_card(ui, data, cal, claude_busy, actions);
-        ui.add_space(6.0);
-        weight_row(ui, data, cal, actions);
+        if ui.available_width() >= 560.0 {
+            ui.horizontal(|ui| {
+                ui.heading(today.format("%A, %B %-d").to_string());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(p) = progress {
+                        ui.add(p);
+                    }
+                });
+            });
+        } else {
+            // not enough room side by side: progress goes under the date
+            ui.heading(today.format("%A, %B %-d").to_string());
+            if let Some(p) = progress {
+                ui.add(p);
+            }
+        }
+        // The quest board: today's anytime items as tiles.
+        let board_ids: Vec<usize> = untimed.iter().filter_map(|e| if let Entry::Item(i) = e { Some(*i) } else { None }).collect();
+        let all_day: Vec<String> =
+            untimed.iter().filter_map(|e| if let Entry::Ext(i) = e { Some(data.gcache[*i].title.clone()) } else { None }).collect();
+        anytime_board(ui, data, today, &board_ids, &all_day, board, actions);
 
         // Overdue: unfinished one-off items from earlier days.
         let mut overdue: Vec<usize> = (0..data.items.len())
@@ -383,7 +420,7 @@ pub fn today(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, claude_busy: bool
             }
         }
 
-        day_list(ui, data, today, actions);
+        day_list(ui, data, today, false, actions);
 
         // Backlog: undated, unfinished.
         let backlog: Vec<usize> = (0..data.items.len()).filter(|i| data.items[*i].date.is_none() && !data.items[*i].done).collect();
@@ -433,7 +470,7 @@ pub fn day_panel(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Act
             };
             ui.label(RichText::new(note).italics().color(NOT_LOGGED_COLOR));
         }
-        day_list(ui, data, day, actions);
+        day_list(ui, data, day, true, actions);
     });
 }
 

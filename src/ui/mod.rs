@@ -1,5 +1,6 @@
 //! The window: top bar, quick-add bar, and the Today / Calendar views.
 
+mod board;
 mod charts;
 mod dialogs;
 mod views;
@@ -97,6 +98,7 @@ pub struct App {
     claude_job: Option<(String, mpsc::Receiver<Result<String, String>>, std::time::Instant, bool)>,
     cal_input: CalorieInput,
     chart_period: charts::Period,
+    board: board::BoardState,
     /// Claude's answer waiting for Apply / Discard: (what was asked, import JSON).
     claude_reply: Option<(String, String)>,
     claude_error: Option<String>,
@@ -133,6 +135,7 @@ impl App {
             claude_job: None,
             cal_input: CalorieInput::default(),
             chart_period: charts::Period::Month,
+            board: board::BoardState::default(),
             claude_reply: None,
             claude_error: None,
             #[cfg(feature = "voice")]
@@ -568,7 +571,10 @@ impl eframe::App for App {
         match self.view {
             View::Today => {
                 let busy = self.claude_job.is_some();
-                egui::CentralPanel::default().show(ctx, |ui| views::today(ui, &data, &mut self.cal_input, busy, &mut actions));
+                egui::SidePanel::right("today_side").resizable(true).default_width(370.0).min_width(300.0).max_width(560.0).show(ctx, |ui| {
+                    views::today_side(ui, &data, &mut self.cal_input, busy, &mut actions);
+                });
+                egui::CentralPanel::default().show(ctx, |ui| views::today(ui, &data, &mut self.board, &mut actions));
             }
             View::Charts => {
                 egui::CentralPanel::default().show(ctx, |ui| charts::charts(ui, &data, &mut self.chart_period));
