@@ -6,6 +6,7 @@ mod charts;
 mod streaks;
 pub mod theme;
 mod dialogs;
+mod palettes;
 mod settings;
 mod views;
 

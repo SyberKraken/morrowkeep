@@ -204,8 +204,16 @@ in Calendar view).
 
 ## Themes
 
-Every color comes from a theme: a JSON file in `Documents\Morrowkeep	hemes\`. Night sky (the
-default) and Daylight are created there on first start. To make your own:
+Every color comes from a theme: a JSON file in `Documents\Morrowkeep	hemes\`. Twelve built-in
+themes are created there on start (missing ones only, your edits are kept):
+
+| dark | light |
+|---|---|
+| Night sky (default), Dracula, Nord, Solarized Dark, Gruvbox Dark, Catppuccin Mocha, Tokyo Night, One Dark, Rosé Pine | Daylight, Solarized Light, Catppuccin Latte |
+
+The ten named after other color schemes are inspired by them: each is generated from that
+scheme's palette with the same rules (see `src/ui/palettes.rs`), and every built-in theme is
+tested for readable text contrast. To make your own:
 
 1. Copy a theme file (e.g. `night-sky.json` → `mine.json`).
 2. Change its `name` and any colors (`"#RRGGBB"` or `"#RRGGBBAA"`).

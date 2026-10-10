@@ -461,7 +461,9 @@ fn daylight() -> Theme {
 
 /// Built-in themes written to the themes folder when missing: (file stem, theme).
 fn builtin() -> Vec<(&'static str, Theme)> {
-    vec![("night-sky", Theme::default()), ("daylight", daylight())]
+    let mut v = vec![("night-sky", Theme::default()), ("daylight", daylight())];
+    v.extend(super::palettes::all());
+    v
 }
 
 impl Theme {
@@ -785,5 +787,33 @@ mod tests {
         assert!(v["motion"]["speed"].is_number()); // added section
         assert!(v["kinds"].get("workout").is_none()); // own kind list left alone
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WCAG contrast ratio between two colors.
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let lum = |c: Color32| {
+            let ch = |v: u8| {
+                let v = v as f32 / 255.0;
+                if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * ch(c.r()) + 0.7152 * ch(c.g()) + 0.0722 * ch(c.b())
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn builtin_themes_are_readable() {
+        let themes = builtin();
+        assert_eq!(themes.len(), 12);
+        for (stem, t) in themes {
+            for bg in [t.surface.page, t.surface.card] {
+                assert!(contrast(t.text.primary, bg) >= 7.0, "{stem}: primary text {:.1}", contrast(t.text.primary, bg));
+                assert!(contrast(t.text.muted, bg) >= 3.0, "{stem}: muted text {:.1}", contrast(t.text.muted, bg));
+            }
+            // the theme survives a round trip through its JSON file
+            let back: Theme = serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
+            assert_eq!(back.name, t.name);
+        }
     }
 }
