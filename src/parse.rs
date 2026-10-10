@@ -440,7 +440,19 @@ fn capitalize(s: &str) -> String {
 
 /// Recognizes calorie, weight, "done" and food entries; None means it's a task.
 pub fn parse_command(input: &str) -> Option<Command> {
-    let text = input.trim();
+    // "I just had …", "I did …", "just weighed …" read the same as without the lead-in
+    let mut text = input.trim();
+    loop {
+        let lower = text.to_lowercase();
+        let Some(rest) = ["i just ", "i've just ", "ive just ", "i ", "i've ", "ive ", "just "]
+            .iter()
+            .find(|p| lower.starts_with(*p))
+            .map(|p| text[p.len()..].trim_start())
+        else {
+            break;
+        };
+        text = rest;
+    }
     let lower = text.to_lowercase();
     let toks: Vec<&str> = lower.split_whitespace().collect();
     let raw: Vec<&str> = text.split_whitespace().collect();
@@ -454,7 +466,7 @@ pub fn parse_command(input: &str) -> Option<Command> {
         return Some(Command::Done(rest_after(1)));
     }
     // weight
-    if matches!(toks[0], "weight" | "weigh" | "weighed" | "weighing" | "vikt") {
+    if matches!(toks[0], "weight" | "weigh" | "weighed" | "weighing" | "weigh-in" | "vikt") {
         if let Some(kg) = toks.get(1).map(|t| t.trim_end_matches("kg")).and_then(number) {
             return Some(Command::Weight(kg));
         }
@@ -585,6 +597,9 @@ mod tests {
         assert_eq!(parse_command("weight 81.9"), Some(Command::Weight(81.9)));
         assert_eq!(parse_command("done vacuum"), Some(Command::Done("vacuum".into())));
         assert_eq!(parse_command("ate a chicken burrito"), Some(Command::Food("a chicken burrito".into())));
+        assert_eq!(parse_command("I had a banana"), Some(Command::Food("a banana".into())));
+        assert_eq!(parse_command("I just did push-ups"), Some(Command::Done("push-ups".into())));
+        assert_eq!(parse_command("I weigh 82.4"), Some(Command::Weight(82.4)));
         // ordinary tasks are not commands
         assert_eq!(parse_command("gym tomorrow 6pm"), None);
         assert_eq!(parse_command("buy 2 kg of potatoes"), None); // 2 kg isn't a body weight

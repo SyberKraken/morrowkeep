@@ -614,15 +614,13 @@ impl SettingsDlg {
         ui.add_space(8.0);
         ui.separator();
         ui.heading("Input mode");
-        ui.radio_value(&mut self.draft.input_mode, "local".to_string(), "Local parser: free and offline, understands dates, times, repeats and #kinds");
+        ui.label(RichText::new("Default mode when Morrowkeep opens. Press Tab in the entry bar (or click its mode chip) to switch for the current session.").weak().size(12.5));
+        ui.radio_value(&mut self.draft.default_input_mode, "local".to_string(), "Local parser: free and offline, understands dates, times, repeats and #kinds");
         ui.radio_value(
-            &mut self.draft.input_mode,
+            &mut self.draft.default_input_mode,
             "claude".to_string(),
             "Claude: requests run through Claude Code signed in with your Claude account (Pro), counting toward your plan's usage limits instead of paid API tokens",
         );
-        if self.draft.input_mode != "claude" {
-            return;
-        }
         ui.indent("claude_opts", |ui| {
             egui::Grid::new("claude_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                 ui.label("Model");

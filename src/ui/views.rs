@@ -270,9 +270,9 @@ fn calorie_list(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Acti
     }
 }
 
-/// Big daily total, manual quick-add, and "describe what you ate" for Claude.
-/// Laid out for the narrow right-hand panel of the Today view.
-fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, claude_busy: bool, actions: &mut Vec<Action>) {
+/// Big daily total, today's budget, manual entry and quick-add buttons. Food descriptions
+/// for Claude go through the entry bar ("ate …"). Laid out for the narrow right-hand panel.
+fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut Vec<Action>) {
     let today = Local::now().date_naive();
     let total = data.calories_on(today);
     egui::Frame::default()
@@ -330,27 +330,6 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, claude_busy:
                     }
                 }
             });
-            ui.add_space(4.0);
-            let r = ui.add(
-                egui::TextEdit::multiline(&mut input.food)
-                    .desired_rows(2)
-                    .desired_width(ui.available_width())
-                    .hint_text("Describe what you ate… e.g. \"chicken burrito and a coke\" or \"200g pasta with pesto\""),
-            );
-            // Enter estimates; Shift+Enter makes a new line
-            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
-            if enter {
-                input.food = input.food.trim_end_matches('\n').to_string();
-            }
-            let can = !input.food.trim().is_empty() && !claude_busy;
-            if ui
-                .add_enabled(can, egui::Button::new(RichText::new("Estimate with Claude").color(CLAUDE_COLOR)))
-                .on_hover_text("Claude estimates on the high side; you review before it's logged")
-                .clicked()
-                || (enter && can)
-            {
-                actions.push(Action::EstimateFood(input.food.trim().to_string()));
-            }
             if data.calories.iter().any(|c| c.date == today) {
                 ui.add_space(6.0);
                 calorie_list(ui, data, today, actions);
@@ -454,10 +433,10 @@ fn backlog_list(ui: &mut Ui, data: &Data, actions: &mut Vec<Action>) {
 }
 
 /// Right-hand panel of the Habits page: calorie and weight entry, today's date, backlog.
-pub fn today_side(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, claude_busy: bool, actions: &mut Vec<Action>) {
+pub fn today_side(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, actions: &mut Vec<Action>) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(10.0);
-        calorie_card(ui, data, cal, claude_busy, actions);
+        calorie_card(ui, data, cal, actions);
         ui.add_space(10.0);
         weight_row(ui, data, cal, actions);
         ui.add_space(8.0);

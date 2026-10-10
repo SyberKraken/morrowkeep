@@ -115,7 +115,8 @@ deleted in Morrowkeep are deleted from Google.
 
 ## Claude input mode (uses your Claude plan, not API credits)
 
-Switch with **Settings > Input mode**, or click the **Local/Claude** chip next to the input box.
+Press **Tab** in the entry bar (or click its **Local/Claude** chip) to switch for the current
+session. Set the mode Morrowkeep starts in under **Settings > Input mode**.
 In Claude mode, what you type or dictate goes to Claude Code (`claude -p`), signed in with your
 own Claude account. The usage counts toward your Pro limits, the same pool as claude.ai. Claude
 gets the import format, today's date and your upcoming items, and replies with import JSON.
@@ -133,14 +134,16 @@ your own subscription.
 ## The entry bar
 
 Start typing anywhere in the window and it goes into the entry bar, unless another text box is
-active. Esc clears it. In **Local** mode (free, offline) it understands:
+active. **Tab** switches between Local and Claude while you type, and Esc clears the bar. The
+mode it starts in is set under Settings > Input mode. In **Local** mode (free, offline) it
+understands:
 
 | you type | does |
 |---|---|
 | `450 kcal pasta`, `+450`, `kcal 300 snack` | logs calories |
 | `82.4 kg`, `weight 82,4`, `weighed 82.4` | logs today's weight |
 | `done vacuum`, `did push-ups` | ticks off the matching task for today |
-| `ate a chicken burrito` | estimates the calories with Claude, then shows them for review |
+| `ate a chicken burrito`, `I had a banana` | estimates the calories with Claude, then shows them for review |
 | anything else | adds a task (see below) |
 
 The preview line under the bar always shows what Enter will do. In **Claude** mode, everything

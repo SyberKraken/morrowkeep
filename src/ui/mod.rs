@@ -43,8 +43,6 @@ pub enum Action {
     /// Today's weight in kg; None removes it.
     SetWeight(Option<f32>),
     DeleteCalories(String),
-    /// Ask Claude to estimate and log calories for a food description.
-    EstimateFood(String),
 }
 
 /// Text fields of the calorie card on the Today view.
@@ -52,7 +50,6 @@ pub enum Action {
 pub struct CalorieInput {
     pub kcal: String,
     pub what: String,
-    pub food: String,
     pub weight: String,
 }
 
@@ -100,6 +97,8 @@ pub struct App {
     /// calorie card's food box).
     claude_job: Option<(String, mpsc::Receiver<Result<String, String>>, std::time::Instant, bool)>,
     cal_input: CalorieInput,
+    /// Entry bar mode for this session (starts from the default in Settings).
+    claude_session: bool,
     chart_period: charts::Period,
     board: board::BoardState,
     /// Claude's answer waiting for Apply / Discard: (what was asked, import JSON).
@@ -122,6 +121,7 @@ impl App {
         }
         *ui_handle.lock().unwrap() = Some(cc.egui_ctx.clone());
         let today = Local::now().date_naive();
+        let start_in_claude = shared.lock().unwrap().settings.default_input_mode == "claude";
         App {
             shared,
             jobs,
@@ -137,6 +137,7 @@ impl App {
             settings: None,
             claude_job: None,
             cal_input: CalorieInput::default(),
+            claude_session: start_in_claude,
             chart_period: charts::Period::Month,
             board: board::BoardState::default(),
             claude_reply: None,
@@ -146,8 +147,8 @@ impl App {
         }
     }
 
-    fn claude_mode(data: &Data) -> bool {
-        data.settings.input_mode == "claude"
+    fn claude_mode(&self) -> bool {
+        self.claude_session
     }
 
     /// Sends a request to Claude Code in the background. `food`: it's a description of
@@ -176,20 +177,13 @@ impl App {
         self.claude_job = Some((request, rx, std::time::Instant::now(), food));
         self.claude_reply = None;
         self.claude_error = None;
-        if food {
-            self.cal_input.food.clear();
-        } else {
-            self.quick.clear();
-        }
+        self.quick.clear();
     }
 
     /// Puts a failed/cancelled request back where it was typed.
     fn restore_request(&mut self, request: String, food: bool) {
-        if food {
-            self.cal_input.food = request;
-        } else {
-            self.quick = request;
-        }
+        // food requests go back as "ate …" so Enter retries the estimate
+        self.quick = if food { format!("ate {request}") } else { request };
     }
 
     /// Spinner while Claude works, then a preview of its changes with Apply / Discard.
@@ -335,8 +329,8 @@ impl App {
         let Some(cmd) = parse_command(text) else { return false };
         let today = Local::now().date_naive();
         match cmd {
-            Command::Calories { kcal, what } => self.apply(data, ctx, Action::AddCalories(kcal, what)),
-            Command::Weight(kg) if (20.0..=400.0).contains(&kg) => self.apply(data, ctx, Action::SetWeight(Some(kg))),
+            Command::Calories { kcal, what } => self.apply(data, Action::AddCalories(kcal, what)),
+            Command::Weight(kg) if (20.0..=400.0).contains(&kg) => self.apply(data, Action::SetWeight(Some(kg))),
             Command::Weight(kg) => {
                 data.status = format!("{kg} kg doesn't look like a body weight");
                 return true;
@@ -346,7 +340,7 @@ impl App {
                     let id = data.items[i].id.clone();
                     let title = data.items[i].title.clone();
                     if !data.items[i].is_done_on(today) {
-                        self.apply(data, ctx, Action::Toggle(id, today));
+                        self.apply(data, Action::Toggle(id, today));
                     }
                     data.status = format!("✔ {title}");
                 }
@@ -391,7 +385,7 @@ impl App {
         self.quick.clear();
     }
 
-    fn apply(&mut self, data: &mut Data, ctx: &egui::Context, action: Action) {
+    fn apply(&mut self, data: &mut Data, action: Action) {
         match action {
             Action::AddCalories(kcal, what) => {
                 let today = Local::now().date_naive();
@@ -411,7 +405,6 @@ impl App {
                 data.calories.retain(|c| c.id != id);
                 data.save_calories();
             }
-            Action::EstimateFood(text) => self.ask_claude(data, ctx, text, true),
             Action::Toggle(id, day) => {
                 if let Some(i) = data.item_index(&id) {
                     data.items[i].toggle_done(day);
@@ -466,19 +459,18 @@ impl App {
         ui.horizontal(|ui| {
             #[cfg(feature = "voice")]
             self.voice_button(ui, data);
-            let claude_mode = Self::claude_mode(data);
+            let claude_mode = self.claude_mode();
             let (chip, chip_color) = if claude_mode { ("Claude", CLAUDE_COLOR) } else { ("Local", Color32::GRAY) };
             if ui
                 .add(egui::Button::new(RichText::new(chip).color(chip_color).strong()))
                 .on_hover_text(if claude_mode {
-                    "Requests go to Claude Code using your Claude plan. Click to switch to the free offline parser."
+                    "Requests go to Claude Code using your Claude plan. Click or press Tab in the bar for the free offline parser."
                 } else {
-                    "Free offline parser. Click to send requests to Claude (your plan) instead."
+                    "Free offline parser. Click or press Tab in the bar to send requests to Claude (your plan) instead."
                 })
                 .clicked()
             {
-                data.settings.input_mode = if claude_mode { "local" } else { "claude" }.into();
-                data.save_settings();
+                self.claude_session = !claude_mode;
             }
             let add_w = 70.0;
             let hint = if claude_mode {
@@ -489,6 +481,8 @@ impl App {
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.quick)
                     .id(Id::new(QUICK_ID))
+                    // keep focus on Tab: Tab switches Local/Claude instead of moving on
+                    .lock_focus(true)
                     .hint_text(hint)
                     .desired_width(ui.available_width() - add_w)
                     .font(egui::TextStyle::Body),
@@ -503,6 +497,9 @@ impl App {
                     state.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(end)));
                     state.store(ui.ctx(), id);
                 }
+            }
+            if resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Tab)) {
+                self.claude_session = !self.claude_session;
             }
             // Esc clears the bar (egui already drops focus on Esc, so catch it as focus is lost)
             if (resp.has_focus() || resp.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -524,7 +521,7 @@ impl App {
         });
         self.claude_panel(ui, data);
         // live preview of how the text was understood
-        if !Self::claude_mode(data) && !self.quick.trim().is_empty() {
+        if !self.claude_mode() && !self.quick.trim().is_empty() {
             if let Some(cmd) = parse_command(&self.quick) {
                 let text = match cmd {
                     Command::Calories { kcal, what } if what.is_empty() => format!("» log {kcal} kcal"),
@@ -675,9 +672,8 @@ impl eframe::App for App {
 
         match self.view {
             View::Today => {
-                let busy = self.claude_job.is_some();
                 egui::SidePanel::right("today_side").resizable(true).default_width(370.0).min_width(300.0).max_width(560.0).show(ctx, |ui| {
-                    views::today_side(ui, &data, &mut self.cal_input, busy, &mut actions);
+                    views::today_side(ui, &data, &mut self.cal_input, &mut actions);
                 });
                 egui::CentralPanel::default().show(ctx, |ui| views::today(ui, &data, &mut self.board, &mut actions));
             }
@@ -702,7 +698,7 @@ impl eframe::App for App {
         }
 
         for a in actions {
-            self.apply(&mut data, ctx, a);
+            self.apply(&mut data, a);
         }
 
         if let Some(mut ed) = self.editor.take() {

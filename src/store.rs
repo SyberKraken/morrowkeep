@@ -84,8 +84,10 @@ pub struct Settings {
     /// No reminders between these times ("HH:MM"; may cross midnight).
     pub quiet_start: String,
     pub quiet_end: String,
-    /// Where quick-add text goes: "local" (offline parser) or "claude" (Claude Code CLI).
-    pub input_mode: String,
+    /// Mode the entry bar starts in: "local" (offline parser) or "claude" (Claude Code CLI).
+    /// Tab or the mode chip switches it for the current session only.
+    #[serde(alias = "input_mode")]
+    pub default_input_mode: String,
     /// Path to claude.exe; empty = find it automatically.
     pub claude_path: String,
     /// Model alias passed to Claude Code: haiku, sonnet or opus.
@@ -114,7 +116,7 @@ impl Default for Settings {
             weight_reminder_after: "10:00".into(),
             quiet_start: "22:00".into(),
             quiet_end: "08:00".into(),
-            input_mode: "local".into(),
+            default_input_mode: "local".into(),
             claude_path: String::new(),
             claude_model: "sonnet".into(),
         }
