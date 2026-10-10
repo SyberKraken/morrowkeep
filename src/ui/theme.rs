@@ -103,8 +103,24 @@ pub struct Theme {
     /// The star field behind the Habits constellation.
     pub sky: Sky,
     pub shape: Shape,
+    pub charts: Charts,
     /// Animations: tile flips, igniting stars, sparkles, counting numbers, toasts.
     pub motion: Motion,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Charts {
+    /// Opacity of the fill under the weight line (0 = no fill).
+    pub line_fill_alpha: f32,
+    /// Rounding of the calorie bars' tops, in pixels.
+    pub bar_radius: u8,
+}
+
+impl Default for Charts {
+    fn default() -> Self {
+        Charts { line_fill_alpha: 0.05, bar_radius: 4 }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -160,6 +176,9 @@ pub struct Surfaces {
     /// Text fields.
     #[serde(with = "hex")]
     pub input: Color32,
+    /// Weekend days in the calendar (a touch dimmer than cards).
+    #[serde(with = "hex")]
+    pub weekend: Color32,
     /// Card and window shadows (use an alpha, e.g. #0000003C).
     #[serde(with = "hex")]
     pub shadow: Color32,
@@ -216,6 +235,12 @@ pub struct StatusColors {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DataColors {
+    /// The Morrowkeep logo and name in the header.
+    #[serde(with = "hex")]
+    pub brand: Color32,
+    /// Today's glowing outline in the calendar.
+    #[serde(with = "hex")]
+    pub today: Color32,
     #[serde(with = "hex")]
     pub calories: Color32,
     #[serde(with = "hex")]
@@ -266,6 +291,7 @@ impl Default for Surfaces {
             card: rgb(22, 28, 44),
             card_border: rgb(38, 46, 68),
             input: rgb(10, 13, 22),
+            weekend: rgb(18, 23, 37),
             shadow: Color32::from_black_alpha(60),
         }
     }
@@ -301,6 +327,8 @@ impl Default for StatusColors {
 impl Default for DataColors {
     fn default() -> Self {
         DataColors {
+            brand: rgb(46, 160, 103),
+            today: rgb(46, 160, 103),
             calories: rgb(235, 120, 50),
             weight: rgb(70, 140, 230),
             claude: rgb(217, 119, 87),
@@ -354,6 +382,7 @@ impl Default for Theme {
             data: DataColors::default(),
             sky: Sky::default(),
             shape: Shape::default(),
+            charts: Charts::default(),
             motion: Motion::default(),
         }
     }
@@ -371,6 +400,7 @@ fn daylight() -> Theme {
             card: rgb(255, 255, 255),
             card_border: rgb(221, 226, 236),
             input: rgb(246, 248, 251),
+            weekend: rgb(246, 248, 251),
             shadow: Color32::from_black_alpha(22),
         },
         text: TextColors { primary: rgb(30, 36, 48), muted: rgb(106, 116, 136), on_color: Color32::WHITE },
@@ -398,6 +428,8 @@ fn daylight() -> Theme {
         .map(|(k, c)| (k.to_string(), c))
         .collect(),
         data: DataColors {
+            brand: rgb(30, 140, 85),
+            today: rgb(30, 140, 85),
             calories: rgb(214, 100, 30),
             weight: rgb(40, 110, 210),
             claude: rgb(196, 98, 66),
@@ -409,6 +441,7 @@ fn daylight() -> Theme {
         },
         sky: Sky { star: Color32::from_rgba_unmultiplied(90, 105, 150, 90), density: 0.6 },
         shape: Shape::default(),
+        charts: Charts { line_fill_alpha: 0.05, bar_radius: 4 },
         motion: Motion::default(),
     }
 }
@@ -466,8 +499,10 @@ pub fn theme_path(data_root: &Path, name: &str) -> PathBuf {
     themes_dir(data_root).join(format!("{name}.json"))
 }
 
-/// Writes the built-in themes to the themes folder if they aren't there (never overwrites
-/// edits).
+/// Writes the built-in themes to the themes folder if they aren't there, and adds any keys
+/// introduced since a theme file was written (with their default values, so nothing changes
+/// visually). That way every theme file shows every option that exists. Never changes values
+/// that are already in a file.
 pub fn install_builtins(data_root: &Path) {
     let dir = themes_dir(data_root);
     let _ = std::fs::create_dir_all(&dir);
@@ -479,6 +514,44 @@ pub fn install_builtins(data_root: &Path) {
             }
         }
     }
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            let _ = add_missing_keys(&path);
+        }
+    }
+}
+
+/// Fills keys missing from a theme file from the matching built-in (dark: Night sky,
+/// light: Daylight). Leaves files with errors alone.
+fn add_missing_keys(path: &Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut file: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+    let dark = file.get("dark").and_then(|d| d.as_bool()).unwrap_or(true);
+    let base = serde_json::to_value(if dark { Theme::default() } else { daylight() }).map_err(|e| e.to_string())?;
+    fn merge(into: &mut serde_json::Value, from: &serde_json::Value) -> bool {
+        let (Some(into), Some(from)) = (into.as_object_mut(), from.as_object()) else { return false };
+        let mut changed = false;
+        for (k, v) in from {
+            // per-kind colors are the user's own list; don't add kinds back
+            if k == "kinds" && into.contains_key(k) {
+                continue;
+            }
+            match into.get_mut(k) {
+                None => {
+                    into.insert(k.clone(), v.clone());
+                    changed = true;
+                }
+                Some(existing) => changed |= merge(existing, v),
+            }
+        }
+        changed
+    }
+    if merge(&mut file, &base) {
+        let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+        std::fs::write(path, json).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Theme files in the themes folder: (file stem, display name).
@@ -684,5 +757,20 @@ mod tests {
         let back: Theme = serde_json::from_str(&json).unwrap();
         assert_eq!(back.surface.page, Theme::default().surface.page);
         assert_eq!(hex::to_string(Color32::from_black_alpha(60)), "#0000003C");
+    }
+
+    #[test]
+    fn old_theme_files_gain_new_keys_without_changing_values() {
+        let dir = std::env::temp_dir().join(format!("mk-theme-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.json");
+        std::fs::write(&path, r##"{"name":"Old","data":{"calories":"#FF0000"},"kinds":{"study":"#00FF00"}}"##).unwrap();
+        add_missing_keys(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["data"]["calories"], "#FF0000"); // kept
+        assert!(v["data"]["today"].is_string()); // added
+        assert!(v["motion"]["speed"].is_number()); // added section
+        assert!(v["kinds"].get("workout").is_none()); // own kind list left alone
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

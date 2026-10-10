@@ -179,19 +179,22 @@ default) and Daylight are created there on first start. To make your own:
 3. Pick it in Settings > Appearance.
 
 While a theme is active, saving its file applies the changes live. A theme file only needs the
-keys it changes; anything missing falls back to Night sky. Sections:
+keys it changes; anything missing falls back to Night sky. On start, Morrowkeep adds keys that
+newer versions introduced to every theme file (with default values, never touching yours), so the
+files always list every option. Sections:
 
 | section | what it colors |
 |---|---|
 | `dark` | `true` for a dark theme, `false` for a light one |
-| `surface` | page, dialogs (`window`), cards and tiles (`card`, `card_border`), text fields (`input`), `shadow` |
+| `surface` | page, dialogs (`window`), cards and tiles (`card`, `card_border`), text fields (`input`), weekend days in the calendar (`weekend`), `shadow` |
 | `text` | `primary`, `muted`, `on_color` (text on filled tiles and chips) |
 | `widget` | buttons (`fill`, `fill_hover`, `fill_active`, `border`, `border_hover`), `selection`, `link` |
 | `status` | `success` (done, all done), `danger` (over budget, errors), `danger_background` |
 | `kinds` | one color per task kind; add any custom kind name, and unknown kinds use `other` |
-| `data` | `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line` |
+| `data` | `brand` (logo and name), `today` (today's ring in the calendar), `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line` |
 | `sky` | the star field: `star` color (alpha = max brightness) and `density` (0 = off) |
 | `shape` | `card_radius`, `tile_radius`, `widget_radius` |
+| `charts` | `line_fill_alpha` (area under the weight line, 0 = none) and `bar_radius` (rounded bar tops) |
 | `motion` | `enabled` (false = no animations) and `speed` (multiplier, e.g. 2.0 = twice as fast) |
 
 ## Shortcuts

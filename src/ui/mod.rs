@@ -501,11 +501,10 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui, data: &mut Data) {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new("✔ Morrowkeep").font(theme::bold(18.0)).color(theme::th().status.success));
-            ui.add_space(12.0);
-            ui.selectable_value(&mut self.view, View::Today, RichText::new("Habits").size(15.0));
-            ui.selectable_value(&mut self.view, View::Calendar, RichText::new("Calendar").size(15.0));
-            ui.selectable_value(&mut self.view, View::Charts, RichText::new("Charts").size(15.0));
+            logo_mark(ui);
+            ui.label(RichText::new("Morrowkeep").font(theme::bold(18.0)).color(theme::th().data.brand));
+            ui.add_space(14.0);
+            tab_bar(ui, &mut self.view);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("⚙ Settings").clicked() {
                     self.settings = Some(SettingsDlg::open(data));
@@ -801,6 +800,58 @@ impl eframe::App for App {
 
         // Keep the clock / "now" line / day rollover current.
         ctx.request_repaint_after(Duration::from_secs(30));
+    }
+}
+
+/// The logo: a tiny constellation (four stars, joined) in the brand color.
+fn logo_mark(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 24.0), egui::Sense::hover());
+    let c = theme::th().data.brand;
+    let p = ui.painter();
+    let pts = [(3.0, 17.0), (11.0, 8.0), (19.0, 14.0), (27.0, 5.0)].map(|(x, y)| rect.left_top() + egui::vec2(x, y));
+    for w in pts.windows(2) {
+        p.line_segment([w[0], w[1]], egui::Stroke::new(1.6, c.linear_multiply(0.8)));
+    }
+    for (i, pt) in pts.iter().enumerate() {
+        let r = if i == 3 { 3.6 } else { 2.6 };
+        p.circle_filled(*pt, r + 2.5, c.linear_multiply(0.2));
+        p.circle_filled(*pt, r, c);
+    }
+}
+
+/// The main tabs as a segmented pill control with icons.
+fn tab_bar(ui: &mut egui::Ui, view: &mut View) {
+    let t = theme::th();
+    let tabs = [(View::Today, "✔", "Habits"), (View::Calendar, "📅", "Calendar"), (View::Charts, "📈", "Charts")];
+    let font = egui::FontId::proportional(14.5);
+    let (pad_x, h) = (14.0, 30.0);
+    let galleys: Vec<_> = tabs
+        .iter()
+        .map(|(_, icon, label)| ui.painter().layout_no_wrap(format!("{icon}  {label}"), font.clone(), t.text.primary))
+        .collect();
+    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 2.0 * pad_x).collect();
+    let total = egui::vec2(widths.iter().sum::<f32>() + 6.0, h);
+    let (outer, _) = ui.allocate_exact_size(total, egui::Sense::hover());
+    let radius = egui::CornerRadius::same((h / 2.0) as u8);
+    ui.painter().rect_filled(outer, radius, t.surface.card);
+    ui.painter().rect_stroke(outer, radius, egui::Stroke::new(1.0, t.surface.card_border), egui::StrokeKind::Inside);
+    let mut x = outer.left() + 3.0;
+    for (k, (tab, icon, label)) in tabs.iter().enumerate() {
+        let r = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), egui::vec2(widths[k], h - 6.0));
+        x += widths[k];
+        let resp = ui.interact(r, Id::new(("tab", k)), egui::Sense::click());
+        let selected = *view == *tab;
+        if selected {
+            ui.painter().rect_filled(r, egui::CornerRadius::same(((h - 6.0) / 2.0) as u8), t.widget.selection);
+        } else if resp.hovered() {
+            ui.painter().rect_filled(r, egui::CornerRadius::same(((h - 6.0) / 2.0) as u8), t.widget.fill_hover);
+        }
+        let ink = if selected || resp.hovered() { t.text.primary } else { t.text.muted };
+        let g = ui.painter().layout_no_wrap(format!("{icon}  {label}"), font.clone(), ink);
+        ui.painter().galley(r.center() - g.size() / 2.0, g, ink);
+        if resp.clicked() {
+            *view = *tab;
+        }
     }
 }
 

@@ -1,11 +1,11 @@
 //! Charts tab: weight history (line) and calories per day (bars) over a chosen period.
 //! Two separate charts on a shared date axis; never one chart with two y-scales.
 
-use super::{weight_color, calorie_color, not_logged_color};
+use super::{weight_color, calorie_color};
 use crate::store::Data;
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use eframe::egui::{self, RichText, Ui};
-use egui_plot::{Bar, BarChart, GridInput, GridMark, HLine, Line, LineStyle, Plot, PlotPoints, Points};
+use egui_plot::{Bar, BarChart, GridInput, GridMark, Line, Plot, PlotPoints, Points};
 
 
 #[derive(Clone, Copy, PartialEq)]
@@ -156,7 +156,7 @@ fn weight_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, height
         }
     });
     if pts.is_empty() {
-        ui.label(RichText::new("No weight logged in this period. Enter it on the Today page.").color(not_logged_color()));
+        super::streaks::empty_state(ui, "No weight logged in this period", "Type your weight in the entry bar (e.g. \"82.4 kg\") or on the Habits page.");
         return;
     }
     let lo = pts.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
@@ -172,7 +172,12 @@ fn weight_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, height
             None => String::new(),
         })
         .show(ui, |plot| {
-            plot.line(Line::new(PlotPoints::new(pts.clone())).color(weight_color()).width(2.0).name("Weight"));
+            let fill = super::theme::th().charts.line_fill_alpha;
+            let mut line = Line::new(PlotPoints::new(pts.clone())).color(weight_color()).width(2.0).name("Weight");
+            if fill > 0.0 {
+                line = line.fill((lo - pad) as f32).fill_alpha(fill);
+            }
+            plot.line(line);
             // markers only while they stay readable
             if n <= 120 {
                 plot.points(Points::new(PlotPoints::new(pts)).color(weight_color()).radius(3.5).name("Weight"));
@@ -213,7 +218,7 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
         }
     });
     if daily.is_empty() {
-        ui.label(RichText::new("No calories logged in this period.").color(not_logged_color()));
+        super::streaks::empty_state(ui, "No calories logged in this period", "Type what you ate in the entry bar (e.g. \"450 kcal pasta\" or \"ate a burrito\").");
         return;
     }
     let max = daily.iter().map(|(_, k)| *k).max().unwrap_or(0).max(limit);
@@ -228,7 +233,9 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
                 .name(d.format("%a %b %-d").to_string())
         })
         .collect();
-    base_plot("calorie_chart", from, to, height)
+    // egui_plot can't round bars, so the chart's own bars are invisible (they still give the
+    // hover tooltips) and rounded bars are painted on top through the plot's transform.
+    let resp = base_plot("calorie_chart", from, to, height)
         .include_y(0.0)
         .include_y(max as f64 * 1.1)
         .y_axis_formatter(|m, _| format!("{:.0}", m.value))
@@ -237,19 +244,28 @@ fn calorie_chart(ui: &mut Ui, data: &Data, from: NaiveDate, to: NaiveDate, heigh
         .show(ui, |plot| {
             plot.bar_chart(
                 BarChart::new(bars)
-                    .color(calorie_color())
+                    .color(egui::Color32::TRANSPARENT)
                     .element_formatter(Box::new(|bar, _| format!("{}\n{:.0} kcal", bar.name, bar.value))),
             );
-            if limit > 0 {
-                plot.hline(
-                    HLine::new(limit as f64)
-                        .color(super::theme::th().data.chart_limit_line)
-                        .width(1.5)
-                        .style(LineStyle::Dashed { length: 8.0 })
-                        .name(format!("Daily limit ({limit})")),
-                );
-            }
         });
+    let tr = resp.transform;
+    let painter = ui.painter_at(*tr.frame());
+    let t = super::theme::th();
+    let hover_x = resp.response.hover_pos().map(|p| p.x);
+    for (d, k) in &daily {
+        let x0 = tr.position_from_point_x(x(*d) - bar_w / 2.0);
+        let x1 = tr.position_from_point_x(x(*d) + bar_w / 2.0);
+        let rect = egui::Rect::from_min_max(egui::pos2(x0, tr.position_from_point_y(*k as f64)), egui::pos2(x1, tr.position_from_point_y(0.0)));
+        let r = t.charts.bar_radius.min(((x1 - x0) / 2.0) as u8);
+        let hovered = hover_x.is_some_and(|hx| hx >= x0 && hx <= x1);
+        let c = if hovered { calorie_color().gamma_multiply(1.25) } else { calorie_color() };
+        painter.rect_filled(rect, egui::CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, c);
+    }
+    if limit > 0 {
+        let y = tr.position_from_point_y(limit as f64);
+        let f = tr.frame();
+        painter.extend(egui::Shape::dashed_line(&[egui::pos2(f.left(), y), egui::pos2(f.right(), y)], egui::Stroke::new(1.5, t.data.chart_limit_line), 8.0, 6.0));
+    }
     if limit > 0 {
         ui.label(RichText::new(format!("Dashed line: your daily limit ({limit} kcal)")).weak().size(12.0));
     }

@@ -639,14 +639,22 @@ pub fn month(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, a
             visuals.selection.bg_fill.linear_multiply(0.35)
         } else if resp.hovered() {
             visuals.widgets.hovered.weak_bg_fill
+        } else if in_month && day.weekday().num_days_from_monday() >= 5 {
+            super::theme::th().surface.weekend
         } else if in_month {
             visuals.faint_bg_color
         } else {
             visuals.extreme_bg_color
         };
-        painter.rect_filled(cell, 5.0, bg);
+        painter.rect_filled(cell, 6.0, bg);
         if day == today {
-            painter.rect_stroke(cell, 5.0, Stroke::new(2.0, super::theme::th().status.success), StrokeKind::Inside);
+            // soft glow: a crisp inner line plus a few fading outer rings
+            let c = super::theme::th().data.today;
+            for i in 1..=4 {
+                let a = 0.32 / i as f32;
+                painter.rect_stroke(cell.expand(i as f32 * 1.6), 6.0 + i as f32 * 1.6, Stroke::new(1.6, c.linear_multiply(a)), StrokeKind::Outside);
+            }
+            painter.rect_stroke(cell, 6.0, Stroke::new(1.5, c), StrokeKind::Inside);
         }
         let num_color = if in_month { visuals.text_color() } else { visuals.weak_text_color() };
         painter.text(cell.left_top() + Vec2::new(6.0, 4.0), Align2::LEFT_TOP, day.day().to_string(), FontId::proportional(13.0), num_color);
@@ -797,6 +805,11 @@ pub fn week(ui: &mut Ui, data: &Data, anchor: NaiveDate, selected: NaiveDate, sc
             let y = grid.top() + h as f32 * HOUR_H;
             painter.line_segment([Pos2::new(grid.left() + GUTTER, y), Pos2::new(grid.right(), y)], Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color));
             painter.text(Pos2::new(grid.left() + GUTTER - 6.0, y + 2.0), Align2::RIGHT_TOP, format!("{h:02}:00"), FontId::monospace(11.0), visuals.weak_text_color());
+        }
+        // weekend columns a touch dimmer
+        for col in 5..7 {
+            let x = grid.left() + GUTTER + col as f32 * col_w;
+            painter.rect_filled(Rect::from_min_size(Pos2::new(x, grid.top()), Vec2::new(col_w, grid.height())), 0.0, super::theme::th().surface.weekend.linear_multiply(0.6));
         }
         for col in 0..=7 {
             let x = grid.left() + GUTTER + col as f32 * col_w;

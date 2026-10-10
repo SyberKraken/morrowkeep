@@ -263,21 +263,21 @@ fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate, state:
             painter.text(Pos2::new(p.x, rect.bottom() - 2.0), Align2::CENTER_BOTTOM, label, FontId::proportional(11.0), ink);
         }
     }
-    if all_done {
+    if ids.is_empty() {
+        // empty state: the constellation continues as dotted, unlit stars waiting to be added
+        let start = Pos2::new(pts[n - 1].x + step, cy + if n % 2 == 0 { -9.0 } else { 9.0 });
+        super::streaks::ghost_stars(painter, start, step, 4, 9.0);
+        let x = start.x + step * 3.0 + 26.0;
+        let t = super::theme::th();
+        painter.text(Pos2::new(x, cy - 9.0), Align2::LEFT_CENTER, "Start your constellation", super::theme::bold(15.0), t.text.primary);
+        painter.text(Pos2::new(x, cy + 10.0), Align2::LEFT_CENTER, "Add a habit or task for today. Each one becomes a star.", FontId::proportional(12.5), t.text.muted);
+    } else if all_done {
         painter.text(
             Pos2::new(pts[n - 1].x + 30.0, cy),
             Align2::LEFT_CENTER,
             "🏆 All done today!",
             FontId::proportional(20.0),
             super::theme::th().status.success,
-        );
-    } else if ids.is_empty() {
-        painter.text(
-            Pos2::new(pts[n - 1].x + 30.0, cy),
-            Align2::LEFT_CENTER,
-            "No habits for today yet. Add one below.",
-            FontId::proportional(15.0),
-            ui.visuals().weak_text_color(),
         );
     }
     let mark = |b: bool| if b { "✔" } else { "not yet" };

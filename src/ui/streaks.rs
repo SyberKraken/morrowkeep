@@ -16,7 +16,7 @@
 //! One-off tasks get a final row of small stars on the day they were finished.
 //! [`day_stars`] draws the same vocabulary small, for calendar month cells.
 
-use super::{kind_color, not_logged_color};
+use super::kind_color;
 use crate::model::{occurrences, Item};
 use crate::store::Data;
 use chrono::{Duration, Local, NaiveDate};
@@ -311,7 +311,7 @@ pub fn streaks_section(ui: &mut Ui, data: &Data, period_days: i64) {
     );
     ui.add_space(4.0);
     if recurring.is_empty() && data.items.iter().all(|i| i.completed_on().is_none_or(|d| d < from)) {
-        ui.label(RichText::new("No recurring tasks yet. Give a task a repeat rule (e.g. \"daily\") to start a streak.").color(not_logged_color()));
+        empty_state(ui, "No streaks yet", "Give a task a repeat rule, like \"daily\" or \"every mon and thu\", and its streak starts here.");
         return;
     }
 
@@ -500,6 +500,29 @@ pub fn day_stars(p: &Painter, area: Rect, data: &Data, day: NaiveDate, today: Na
         let last = pts[n - 1];
         four_point_star(p, Pos2::new(last.x + step * 1.2, last.y), r * 2.0, super::gold_color());
     }
+}
+
+/// A dotted, unlit constellation: the "nothing here yet" picture used by empty states.
+pub fn ghost_stars(p: &Painter, start: Pos2, step: f32, n: usize, amp: f32) {
+    let c = super::theme::th().text.muted.linear_multiply(0.5);
+    let pts: Vec<Pos2> = (0..n).map(|k| Pos2::new(start.x + step * k as f32, start.y + if k % 2 == 0 { -amp } else { amp })).collect();
+    for w in pts.windows(2) {
+        p.extend(Shape::dashed_line(&[w[0], w[1]], Stroke::new(1.0, c), 4.0, 4.0));
+    }
+    for pt in &pts {
+        p.circle_stroke(*pt, 5.0, Stroke::new(1.3, c));
+    }
+}
+
+/// Empty state: a ghost constellation with a short headline and an inviting line.
+pub fn empty_state(ui: &mut Ui, title: &str, body: &str) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 64.0), Sense::hover());
+    let p = ui.painter();
+    ghost_stars(p, Pos2::new(rect.left() + 14.0, rect.center().y), 30.0, 5, 8.0);
+    let t = super::theme::th();
+    let x = rect.left() + 14.0 + 30.0 * 4.0 + 28.0;
+    p.text(Pos2::new(x, rect.center().y - 9.0), Align2::LEFT_CENTER, title, super::theme::bold(15.0), t.text.primary);
+    p.text(Pos2::new(x, rect.center().y + 11.0), Align2::LEFT_CENTER, body, FontId::proportional(12.5), t.text.muted);
 }
 
 /// The gold "everything done" star.
