@@ -19,8 +19,11 @@ use eframe::egui::{
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// Seconds the flip animation takes.
+/// Seconds the flip animation takes (before the theme's motion speed).
 const FLIP: f32 = 0.4;
+/// Seconds a star takes to ignite, and a tile's sparkle burst lasts.
+const IGNITE: f32 = 0.8;
+const SPARKLE: f32 = 0.75;
 /// Seconds a completed tile stays on the board before moving to the tray.
 const LINGER: f32 = 2.2;
 const GAP: f32 = 10.0;
@@ -40,6 +43,9 @@ pub struct BoardState {
     /// layout is frozen, so tiles never move under the cursor.
     layout: Vec<String>,
     grid: Option<Rect>,
+    /// Star key ("kcal", "kg" or item id) → lit last frame, and when stars lit up.
+    star_lit: HashMap<String, bool>,
+    ignited: HashMap<String, Instant>,
 }
 
 pub fn kind_icon(kind: &str) -> &'static str {
@@ -109,6 +115,31 @@ fn draw_tile(ui: &Ui, rect: Rect, item: &Item, done_now: bool, flip: f32, hovere
     clip.galley(pos, galley, ink);
 }
 
+/// A burst of small sparks flying out from a tile's center (`t` = 0..1 progress).
+fn sparkle(ui: &Ui, rect: Rect, color: Color32, t: f32) {
+    let p = ui.painter();
+    let ease = 1.0 - (1.0 - t).powi(3); // fast out, slow settle
+    let fade = 1.0 - t;
+    let reach = rect.width().min(rect.height()) * 0.75;
+    let light = super::theme::th().text.on_color;
+    for i in 0..14 {
+        // fixed, slightly irregular directions and distances
+        let a = i as f32 / 14.0 * std::f32::consts::TAU + (i * 7 % 5) as f32 * 0.09;
+        let dist = reach * (0.55 + (i * 13 % 7) as f32 / 14.0) * ease;
+        let pos = rect.center() + Vec2::new(a.cos(), a.sin()) * dist;
+        let c = if i % 3 == 0 { light } else { color };
+        let r = 1.2 + 2.6 * fade * if i % 2 == 0 { 1.0 } else { 0.7 };
+        if i % 4 == 0 {
+            // a few tiny 4-point sparks
+            let s = r * 1.8;
+            p.line_segment([pos - Vec2::new(s, 0.0), pos + Vec2::new(s, 0.0)], Stroke::new(1.2, c.linear_multiply(fade)));
+            p.line_segment([pos - Vec2::new(0.0, s), pos + Vec2::new(0.0, s)], Stroke::new(1.2, c.linear_multiply(fade)));
+        } else {
+            p.circle_filled(pos, r, c.linear_multiply(fade));
+        }
+    }
+}
+
 fn draw_add_tile(ui: &Ui, rect: Rect, hovered: bool) {
     let visuals = ui.visuals();
     let painter = ui.painter();
@@ -140,25 +171,46 @@ fn draw_add_tile(ui: &Ui, rect: Rect, hovered: bool) {
 
 /// The page's progress display: one star per task, lit in the task's color when done, with
 /// lines joining neighbouring lit stars. Spreads across the available width.
-fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate) {
+fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate, state: &mut BoardState) {
     // Two fixed trackers first (always in the same place), then one star per task.
     struct Star {
         lit: bool,
         color: Color32,
         label: Option<&'static str>,
+        key: String,
     }
     let kcal_logged = data.calories_on(day) > 0;
     let weight_logged = data.weight_on(day).is_some();
     let mut stars = vec![
-        Star { lit: kcal_logged, color: calorie_color(), label: Some("kcal") },
-        Star { lit: weight_logged, color: weight_color(), label: Some("kg") },
+        Star { lit: kcal_logged, color: calorie_color(), label: Some("kcal"), key: "kcal".into() },
+        Star { lit: weight_logged, color: weight_color(), label: Some("kg"), key: "kg".into() },
     ];
     stars.extend(ids.iter().map(|i| {
         let item = &data.items[*i];
-        Star { lit: item.is_done_on(day), color: kind_color(&item.kind), label: None }
+        Star { lit: item.is_done_on(day), color: kind_color(&item.kind), label: None, key: item.id.clone() }
     }));
     let n = stars.len();
     let done = stars.iter().filter(|s| s.lit).count();
+
+    // A star that was unlit last frame and is lit now ignites. Stars seen for the first time
+    // (app start, new task) just appear, so opening the app doesn't set everything off.
+    let now = Instant::now();
+    let ignite_secs = super::theme::anim(IGNITE);
+    for s in &stars {
+        if s.lit && state.star_lit.get(&s.key) == Some(&false) && ignite_secs > 0.0 {
+            state.ignited.insert(s.key.clone(), now);
+        }
+    }
+    state.star_lit = stars.iter().map(|s| (s.key.clone(), s.lit)).collect();
+    state.ignited.retain(|_, t| now.duration_since(*t).as_secs_f32() < ignite_secs);
+    // 0..1 progress of each star's ignition (1 = settled)
+    let progress: Vec<f32> = stars
+        .iter()
+        .map(|s| state.ignited.get(&s.key).map_or(1.0, |t| (now.duration_since(*t).as_secs_f32() / ignite_secs).min(1.0)))
+        .collect();
+    if progress.iter().any(|p| *p < 1.0) {
+        ui.ctx().request_repaint();
+    }
     let tasks_done = ids.iter().filter(|i| data.items[**i].is_done_on(day)).count();
 
     let width = ui.available_width();
@@ -182,14 +234,26 @@ fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate) {
     // faint path through all stars, brighter segments between lit neighbours
     for i in 1..n {
         let (a, b) = (&stars[i - 1], &stars[i]);
-        let (stroke_w, color) = if a.lit && b.lit { (2.5, b.color.linear_multiply(0.8)) } else { (1.0, dim.linear_multiply(0.35)) };
-        painter.line_segment([pts[i - 1], pts[i]], Stroke::new(stroke_w, color));
+        painter.line_segment([pts[i - 1], pts[i]], Stroke::new(1.0, dim.linear_multiply(0.35)));
+        if a.lit && b.lit {
+            // a newly joined segment draws itself from the star that was already lit
+            let grow = ((progress[i - 1].min(progress[i])) / 0.55).min(1.0);
+            let (from, to) = if progress[i] < progress[i - 1] { (pts[i - 1], pts[i]) } else { (pts[i], pts[i - 1]) };
+            let end = from + (to - from) * grow;
+            painter.line_segment([from, end], Stroke::new(2.5, b.color.linear_multiply(0.8)));
+        }
     }
-    for (p, star) in pts.iter().zip(&stars) {
+    for (k, (p, star)) in pts.iter().zip(&stars).enumerate() {
         if star.lit {
-            painter.circle_filled(*p, 15.0, star.color.linear_multiply(0.12)); // outer glow
-            painter.circle_filled(*p, 10.0, star.color.linear_multiply(0.3));
-            painter.circle_filled(*p, 6.5, star.color);
+            let t = progress[k];
+            // pop: swells and settles; plus an expanding ring that fades
+            let pop = 1.0 + 0.8 * (std::f32::consts::PI * t).sin() * (1.0 - t);
+            if t < 1.0 {
+                painter.circle_stroke(*p, 7.0 + 26.0 * t, Stroke::new(2.0 * (1.0 - t) + 0.5, star.color.linear_multiply(0.7 * (1.0 - t))));
+            }
+            painter.circle_filled(*p, 15.0 * pop, star.color.linear_multiply(0.12)); // outer glow
+            painter.circle_filled(*p, 10.0 * pop, star.color.linear_multiply(0.3));
+            painter.circle_filled(*p, 6.5 * pop, star.color);
         } else {
             painter.circle_stroke(*p, 5.5, Stroke::new(1.6, dim));
         }
@@ -241,7 +305,7 @@ pub fn anytime_board(ui: &mut Ui, data: &Data, day: NaiveDate, ids: &[usize], al
 
     // Header: the constellation is the progress display
     ui.add_space(6.0);
-    constellation(ui, data, ids, day);
+    constellation(ui, data, ids, day, state);
     ui.add_space(8.0);
 
     if !all_day.is_empty() {
@@ -311,11 +375,24 @@ pub fn anytime_board(ui: &mut Ui, data: &Data, day: NaiveDate, ids: &[usize], al
                 format!("{}\n\nClick to complete · right-click to edit", item.notes)
             });
         let done = item.is_done_on(day);
-        let flip = age(&item.id).map_or(1.0, |a| (a / FLIP).min(1.0));
+        let flip_secs = super::theme::anim(FLIP);
+        let flip = match age(&item.id) {
+            Some(a) if flip_secs > 0.0 => (a / flip_secs).min(1.0),
+            _ => 1.0,
+        };
         if age(&item.id).is_some() {
             animating = true;
         }
         draw_tile(ui, rect, item, done, flip, resp.hovered());
+        if done {
+            if let Some(a) = age(&item.id) {
+                let start = flip_secs * 0.5;
+                let len = super::theme::anim(SPARKLE);
+                if len > 0.0 && a >= start && a < start + len {
+                    sparkle(ui, rect, kind_color(&item.kind), (a - start) / len);
+                }
+            }
+        }
         if resp.clicked() {
             actions.push(Action::Toggle(item.id.clone(), day));
             toggled_now.push(item.id.clone());

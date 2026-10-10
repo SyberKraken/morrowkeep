@@ -103,6 +103,44 @@ pub struct Theme {
     /// The star field behind the Habits constellation.
     pub sky: Sky,
     pub shape: Shape,
+    /// Animations: tile flips, igniting stars, sparkles, counting numbers, toasts.
+    pub motion: Motion,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Motion {
+    /// false = no animations at all (everything jumps straight to its end state).
+    pub enabled: bool,
+    /// Speed multiplier: 2.0 = twice as fast, 0.5 = half speed.
+    pub speed: f32,
+}
+
+impl Default for Motion {
+    fn default() -> Self {
+        Motion { enabled: true, speed: 1.0 }
+    }
+}
+
+/// Smoothly animates a number toward `target` (e.g. a total that just changed); instant when
+/// the theme turns motion off.
+pub fn animate(ctx: &egui::Context, id: &str, target: f32, secs: f32) -> f32 {
+    let t = anim(secs);
+    if t <= 0.0 {
+        target
+    } else {
+        ctx.animate_value_with_time(egui::Id::new(("anim", id)), target, t)
+    }
+}
+
+/// Duration of an animation in seconds after the theme's motion settings (0 = instant).
+pub fn anim(secs: f32) -> f32 {
+    let m = th().motion.clone();
+    if m.enabled && m.speed > 0.0 {
+        secs / m.speed
+    } else {
+        0.0
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -316,6 +354,7 @@ impl Default for Theme {
             data: DataColors::default(),
             sky: Sky::default(),
             shape: Shape::default(),
+            motion: Motion::default(),
         }
     }
 }
@@ -370,6 +409,7 @@ fn daylight() -> Theme {
         },
         sky: Sky { star: Color32::from_rgba_unmultiplied(90, 105, 150, 90), density: 0.6 },
         shape: Shape::default(),
+        motion: Motion::default(),
     }
 }
 

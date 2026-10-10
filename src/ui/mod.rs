@@ -108,6 +108,9 @@ pub struct App {
     cal_input: CalorieInput,
     /// Theme version last applied to egui's visuals.
     theme_version: u64,
+    /// Status message being shown as a toast, and when it appeared.
+    toast: Option<(String, std::time::Instant)>,
+    last_status: String,
     /// Entry bar mode for this session (starts from the default in Settings).
     claude_session: bool,
     chart_period: charts::Period,
@@ -149,6 +152,8 @@ impl App {
             claude_job: None,
             cal_input: CalorieInput::default(),
             theme_version: theme::version(),
+            toast: None,
+            last_status: String::new(),
             claude_session: start_in_claude,
             chart_period: charts::Period::Month,
             board: board::BoardState::default(),
@@ -440,6 +445,59 @@ impl App {
         }
     }
 
+    /// The current toast: a pill at the bottom that slides in and fades out. Problems stay
+    /// longer. Click to dismiss.
+    fn show_toast(&mut self, ctx: &egui::Context) {
+        let Some((msg, since)) = self.toast.clone() else { return };
+        let lower = msg.to_lowercase();
+        let problem = ["fail", "error", "couldn't", "not ", "no task", "doesn't", "isn't"].iter().any(|w| lower.contains(w));
+        let life = if problem { 7.0 } else { 3.5 };
+        let age = since.elapsed().as_secs_f32();
+        if age >= life {
+            self.toast = None;
+            return;
+        }
+        let t = theme::th();
+        let slide = theme::anim(0.22);
+        let fade_out = theme::anim(0.45);
+        let enter = if slide > 0.0 { (age / slide).min(1.0) } else { 1.0 };
+        let leave = if fade_out > 0.0 { ((life - age) / fade_out).min(1.0) } else { 1.0 };
+        let alpha = enter.min(leave);
+        let lift = (1.0 - enter) * 18.0;
+        let accent = if problem { t.status.danger } else { t.status.success };
+        let resp = egui::Area::new(Id::new("toast"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -22.0 + lift])
+            .order(egui::Order::Foreground)
+            .interactable(true)
+            .show(ctx, |ui| {
+                ui.multiply_opacity(alpha);
+                egui::Frame::default()
+                    .fill(t.surface.window)
+                    .stroke(egui::Stroke::new(1.0, t.surface.card_border))
+                    .corner_radius(egui::CornerRadius::same(20))
+                    .inner_margin(egui::Margin::symmetric(16, 9))
+                    .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.surface.shadow })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 4.0, accent);
+                            ui.label(RichText::new(&msg).color(t.text.primary));
+                        });
+                    });
+            })
+            .response;
+        if resp.interact(egui::Sense::click()).clicked() {
+            self.toast = None;
+            return;
+        }
+        // repaint smoothly while sliding/fading, otherwise just when it should disappear
+        if age < slide || life - age < fade_out {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(Duration::from_secs_f32((life - fade_out - age).max(0.0)));
+        }
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui, data: &mut Data) {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
@@ -462,7 +520,6 @@ impl App {
                         let _ = self.jobs.send(Job::SyncNow);
                     }
                 }
-                ui.add(egui::Label::new(RichText::new(&data.status).weak()).truncate());
             });
         });
     }
@@ -732,6 +789,15 @@ impl eframe::App for App {
                 self.settings = Some(dlg);
             }
         }
+
+        // New status messages appear as a toast at the bottom (routine sync results don't).
+        if data.status != self.last_status {
+            self.last_status = data.status.clone();
+            if !data.status.is_empty() && !data.status.starts_with("Synced") {
+                self.toast = Some((data.status.clone(), std::time::Instant::now()));
+            }
+        }
+        self.show_toast(ctx);
 
         // Keep the clock / "now" line / day rollover current.
         ctx.request_repaint_after(Duration::from_secs(30));

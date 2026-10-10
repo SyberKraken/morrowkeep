@@ -277,7 +277,9 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mu
     super::theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(total.to_string()).font(super::theme::bold(46.0)).color(calorie_color()));
+                // counts up/down to the new total instead of jumping
+                let shown = super::theme::animate(ui.ctx(), "kcal_total", total as f32, 0.6).round() as i64;
+                ui.label(RichText::new(shown.to_string()).font(super::theme::bold(46.0)).color(calorie_color()));
                 ui.vertical(|ui| {
                     ui.add_space(14.0);
                     ui.label(RichText::new("kcal today").size(16.0));
@@ -351,7 +353,8 @@ fn weight_row(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut 
             match (today_kg, previous) {
                 (Some(k), p) => {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{k:.1} kg")).font(super::theme::bold(28.0)).color(weight_color()));
+                        let shown = super::theme::animate(ui.ctx(), "weight_today", k, 0.6);
+                        ui.label(RichText::new(format!("{shown:.1} kg")).font(super::theme::bold(28.0)).color(weight_color()));
                         if let Some(p) = p {
                             ui.label(RichText::new(format!("{:+.1} kg since {}", k - p.kg, p.date.format("%b %-d"))).weak());
                         }

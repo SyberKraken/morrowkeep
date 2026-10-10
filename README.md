@@ -60,6 +60,9 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
     show the notifications in the notification panel.
 - **Look and feel.** A night-sky theme with the Inter font. Themes and fonts can be switched
   under Settings > Appearance (see [Themes](#themes)).
+- **Small moments of delight.** A finished tile flips and throws a burst of sparkles, its star
+  in the constellation ignites, totals count to their new value, and messages appear as short
+  toasts. All of it can be slowed down, sped up or turned off in the theme (`motion`).
 - **Lightweight.** A single 9 MB native exe with no browser engine. With the window open it uses
   about 80 MB of RAM and 0% CPU when idle. Closing the window tears down the window and GPU
   context, leaving only the tray and a background worker at about 5–12 MB. Measured on Windows 11
@@ -189,6 +192,7 @@ keys it changes; anything missing falls back to Night sky. Sections:
 | `data` | `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line` |
 | `sky` | the star field: `star` color (alpha = max brightness) and `density` (0 = off) |
 | `shape` | `card_radius`, `tile_radius`, `widget_radius` |
+| `motion` | `enabled` (false = no animations) and `speed` (multiplier, e.g. 2.0 = twice as fast) |
 
 ## Shortcuts
 
