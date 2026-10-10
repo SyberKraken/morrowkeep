@@ -83,9 +83,11 @@ fn draw_tile(ui: &Ui, rect: Rect, item: &Item, done_now: bool, flip: f32, hovere
     if showing_done {
         painter.rect_filled(r, radius, color);
     } else {
-        let fill = if hovered { color.linear_multiply(0.14) } else { visuals.faint_bg_color };
+        // pending: a calm card; the kind color shows in the icon and, on hover, the border
+        let fill = if hovered { super::theme::CARD.lerp_to_gamma(color, 0.10) } else { super::theme::CARD };
         painter.rect_filled(r, radius, fill);
-        painter.rect_stroke(r, radius, Stroke::new(if hovered { 2.5 } else { 2.0 }, color.linear_multiply(0.85)), StrokeKind::Inside);
+        let border = if hovered { Stroke::new(1.5, color.linear_multiply(0.9)) } else { Stroke::new(1.0, super::theme::CARD_BORDER) };
+        painter.rect_stroke(r, radius, border, StrokeKind::Inside);
     }
     if sx < 0.35 {
         return; // too thin mid-flip to show content
@@ -167,6 +169,8 @@ fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate) {
     // trophy space on the right when everything is done
     let right_pad = if all_done { 190.0 } else { 20.0 };
     let step = ((width - 20.0 - right_pad) / n as f32).clamp(22.0, 64.0);
+    // faint static sky behind the stars
+    super::theme::star_field(ui.painter(), rect, 0.9);
     let painter = ui.painter();
     let dim = ui.visuals().weak_text_color().linear_multiply(0.7);
     let cy = rect.center().y - 4.0; // leave room for the tracker labels underneath

@@ -392,8 +392,11 @@ impl SettingsDlg {
         }
     }
 
-    fn commit(&mut self, data: &mut Data) {
+    fn commit(&mut self, data: &mut Data, ctx: &egui::Context) {
         self.draft.pull_calendars = self.pull.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if data.settings.font != self.draft.font {
+            super::theme::apply_fonts(ctx, &self.draft.font);
+        }
         if data.settings != self.draft {
             data.settings = self.draft.clone();
             data.save_settings();
@@ -432,6 +435,20 @@ impl SettingsDlg {
                 ui.label(RichText::new("All your data is plain JSON in this folder. Set the MORROWKEEP_DIR environment variable to use another folder (e.g. one synced by OneDrive).").weak().size(12.0));
 
                 self.input_section(ui, data);
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.heading("Appearance");
+                ui.horizontal(|ui| {
+                    ui.label("Font");
+                    let current = super::theme::FONTS.iter().find(|(v, _)| *v == self.draft.font).map_or(self.draft.font.as_str(), |(_, l)| *l);
+                    egui::ComboBox::from_id_salt("font").selected_text(current).width(260.0).show_ui(ui, |ui| {
+                        for (value, label) in super::theme::FONTS {
+                            ui.selectable_value(&mut self.draft.font, value.to_string(), *label);
+                        }
+                    });
+                    ui.label(RichText::new("applied when you press Save").weak().size(12.0));
+                });
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -493,7 +510,7 @@ impl SettingsDlg {
                     } else {
                         let label = if data.google_connected { "Reconnect" } else { "Connect Google account" };
                         if ui.button(label).clicked() {
-                            self.commit(data);
+                            self.commit(data, ctx);
                             let settings = data.settings.clone();
                             let token = data.paths.token.clone();
                             let (tx, rx) = mpsc::channel();
@@ -598,7 +615,7 @@ impl SettingsDlg {
             ui.separator();
             ui.horizontal(|ui| {
                 if ui.button(RichText::new("Save").strong()).clicked() {
-                    self.commit(data);
+                    self.commit(data, ctx);
                     keep = false;
                 }
                 if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {

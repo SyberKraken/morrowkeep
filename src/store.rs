@@ -70,6 +70,8 @@ pub struct Settings {
     /// "en", "sv", ... or "auto". Non-English needs a multilingual model (no ".en").
     pub voice_language: String,
     pub close_to_tray: bool,
+    /// UI font: "inter" (default), "nunito", "segoe" or "egui".
+    pub font: String,
     /// Periodic Windows notifications.
     pub reminders_enabled: bool,
     pub reminder_interval_min: u32,
@@ -107,6 +109,7 @@ impl Default for Settings {
             daily_calorie_limit: 0,
             voice_language: "en".into(),
             close_to_tray: true,
+            font: "inter".into(),
             reminders_enabled: true,
             reminder_interval_min: 60,
             remind_anytime: true,

@@ -3,6 +3,7 @@
 mod board;
 mod charts;
 mod streaks;
+pub mod theme;
 mod dialogs;
 mod views;
 
@@ -110,7 +111,7 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext, shared: Arc<Mutex<Data>>, jobs: Sender<Job>, ui_handle: UiHandle) -> Self {
-        setup_style(&cc.egui_ctx);
+        setup_style(&cc.egui_ctx, &shared.lock().unwrap().settings.font);
         {
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
             if let Ok(h) = cc.window_handle() {
@@ -431,7 +432,7 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui, data: &mut Data) {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new("✔ Morrowkeep").strong().size(18.0).color(Color32::from_rgb(46, 160, 103)));
+            ui.label(RichText::new("✔ Morrowkeep").font(theme::bold(18.0)).color(Color32::from_rgb(46, 160, 103)));
             ui.add_space(12.0);
             ui.selectable_value(&mut self.view, View::Today, RichText::new("Habits").size(15.0));
             ui.selectable_value(&mut self.view, View::Calendar, RichText::new("Calendar").size(15.0));
@@ -722,12 +723,16 @@ impl eframe::App for App {
     }
 }
 
-fn setup_style(ctx: &egui::Context) {
+fn setup_style(ctx: &egui::Context, font: &str) {
+    theme::apply_fonts(ctx, font);
+    // Always the night-sky palette (it's what the constellations are designed against).
+    ctx.options_mut(|o| o.theme_preference = egui::ThemePreference::Dark);
+    ctx.set_visuals_of(egui::Theme::Dark, theme::night_visuals());
     ctx.all_styles_mut(|style| {
         use egui::{FontFamily, FontId, TextStyle};
         style.text_styles.insert(TextStyle::Body, FontId::new(14.5, FontFamily::Proportional));
         style.text_styles.insert(TextStyle::Button, FontId::new(14.0, FontFamily::Proportional));
-        style.text_styles.insert(TextStyle::Heading, FontId::new(22.0, FontFamily::Proportional));
+        style.text_styles.insert(TextStyle::Heading, FontId::new(22.0, theme::bold_family()));
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(8.0, 4.0);
         style.spacing.interact_size.y = 24.0;

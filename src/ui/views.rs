@@ -275,15 +275,10 @@ fn calorie_list(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Acti
 fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut Vec<Action>) {
     let today = Local::now().date_naive();
     let total = data.calories_on(today);
-    egui::Frame::default()
-        .fill(ui.visuals().faint_bg_color)
-        .stroke(Stroke::new(1.0, CALORIE_COLOR.linear_multiply(0.6)))
-        .inner_margin(12.0)
-        .corner_radius(8.0)
-        .show(ui, |ui| {
+    super::theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(total.to_string()).size(46.0).strong().color(CALORIE_COLOR));
+                ui.label(RichText::new(total.to_string()).font(super::theme::bold(46.0)).color(CALORIE_COLOR));
                 ui.vertical(|ui| {
                     ui.add_space(14.0);
                     ui.label(RichText::new("kcal today").size(16.0));
@@ -342,12 +337,7 @@ fn weight_row(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut 
     let today = Local::now().date_naive();
     let today_kg = data.weight_on(today);
     let previous = data.weight_before(today);
-    egui::Frame::default()
-        .fill(ui.visuals().faint_bg_color)
-        .stroke(Stroke::new(1.0, WEIGHT_COLOR.linear_multiply(0.6)))
-        .inner_margin(12.0)
-        .corner_radius(8.0)
-        .show(ui, |ui| {
+    super::theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Weight").size(16.0).strong());
@@ -362,7 +352,7 @@ fn weight_row(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut 
             match (today_kg, previous) {
                 (Some(k), p) => {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{k:.1} kg")).size(26.0).strong().color(WEIGHT_COLOR));
+                        ui.label(RichText::new(format!("{k:.1} kg")).font(super::theme::bold(28.0)).color(WEIGHT_COLOR));
                         if let Some(p) = p {
                             ui.label(RichText::new(format!("{:+.1} kg since {}", k - p.kg, p.date.format("%b %-d"))).weak());
                         }

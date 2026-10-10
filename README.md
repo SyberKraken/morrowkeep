@@ -58,6 +58,8 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
     Settings > Reminders.
   - Morrowkeep keeps its Start menu shortcut tagged with its notification ID. Windows needs that to
     show the notifications in the notification panel.
+- **Look and feel.** A night-sky theme with the Inter font. You can switch to Nunito, Segoe UI
+  or egui's built-in font under Settings > Appearance.
 - **Lightweight.** A single 9 MB native exe with no browser engine. With the window open it uses
   about 80 MB of RAM and 0% CPU when idle. Closing the window tears down the window and GPU
   context, leaving only the tray and a background worker at about 5–12 MB. Measured on Windows 11
@@ -179,6 +181,9 @@ Run key, so Morrowkeep starts in the tray.
 ## License
 
 [MIT](LICENSE).
+
+Bundled fonts in `assets/fonts`: Inter and Nunito, both under the SIL Open Font License (see
+`Inter-LICENSE.txt` and `Nunito-OFL.txt`).
 
 Third-party code in `vendor/whisper-rs-sys`: the `whisper-rs-sys` crate is released under the
 [Unlicense](https://unlicense.org/). The whisper.cpp sources inside it are MIT-licensed by the ggml
