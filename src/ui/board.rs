@@ -135,43 +135,61 @@ fn draw_add_tile(ui: &Ui, rect: Rect, hovered: bool) {
     painter.text(rect.center() + Vec2::new(0.0, 18.0 * s), Align2::CENTER_CENTER, "Add task", FontId::proportional(14.0 * s), c);
 }
 
-/// One star per task; lit (in the task's color) when done, with lines between neighbouring
-/// lit stars.
+/// The page's progress display: one star per task, lit in the task's color when done, with
+/// lines joining neighbouring lit stars. Spreads across the available width.
 fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate) {
     let n = ids.len();
+    let done = ids.iter().filter(|i| data.items[**i].is_done_on(day)).count();
+    let width = ui.available_width();
+    let height = 56.0;
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     if n == 0 {
+        ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, "No habits for today yet. Add one below.", FontId::proportional(15.0), ui.visuals().weak_text_color());
         return;
     }
-    let step = 16.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(step * n as f32 + 6.0, 18.0), Sense::hover());
+    let all_done = done == n;
+    // trophy space on the right when everything is done
+    let right_pad = if all_done { 190.0 } else { 20.0 };
+    let step = ((width - 20.0 - right_pad) / n.max(1) as f32).clamp(22.0, 64.0);
     let painter = ui.painter();
-    let dim = ui.visuals().weak_text_color().linear_multiply(0.6);
+    let dim = ui.visuals().weak_text_color().linear_multiply(0.7);
     let pts: Vec<(Pos2, bool, Color32)> = ids
         .iter()
         .enumerate()
         .map(|(i, idx)| {
             let item = &data.items[*idx];
-            // gentle zig-zag so it reads as a constellation rather than a progress bar
-            let y = rect.center().y + if i % 2 == 0 { -3.0 } else { 3.0 };
-            (Pos2::new(rect.left() + 8.0 + step * i as f32, y), item.is_done_on(day), kind_color(&item.kind))
+            // zig-zag so it reads as a constellation rather than a progress bar
+            let y = rect.center().y + if i % 2 == 0 { -9.0 } else { 9.0 };
+            (Pos2::new(rect.left() + 14.0 + step * i as f32, y), item.is_done_on(day), kind_color(&item.kind))
         })
         .collect();
+    // faint path through all stars, brighter segments between lit neighbours
     for w in pts.windows(2) {
-        if w[0].1 && w[1].1 {
-            painter.line_segment([w[0].0, w[1].0], Stroke::new(1.5, w[1].2.linear_multiply(0.7)));
-        }
+        let (stroke_w, color) = if w[0].1 && w[1].1 { (2.5, w[1].2.linear_multiply(0.8)) } else { (1.0, dim.linear_multiply(0.35)) };
+        painter.line_segment([w[0].0, w[1].0], Stroke::new(stroke_w, color));
     }
-    for (p, lit, c) in pts {
-        if lit {
-            painter.circle_filled(p, 6.5, c.linear_multiply(0.25)); // glow
-            painter.circle_filled(p, 4.0, c);
+    for (p, lit, c) in &pts {
+        if *lit {
+            painter.circle_filled(*p, 15.0, c.linear_multiply(0.12)); // outer glow
+            painter.circle_filled(*p, 10.0, c.linear_multiply(0.3));
+            painter.circle_filled(*p, 6.5, *c);
         } else {
-            painter.circle_stroke(p, 3.0, Stroke::new(1.2, dim));
+            painter.circle_stroke(*p, 5.5, Stroke::new(1.6, dim));
         }
     }
+    if all_done {
+        painter.text(
+            Pos2::new(pts.last().unwrap().0.x + 30.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            format!("🏆 All {n} done!"),
+            FontId::proportional(20.0),
+            Color32::from_rgb(46, 160, 103),
+        );
+    }
+    resp.on_hover_text(format!("{done} of {n} done today"));
 }
 
-/// The anytime section of the Today view. `ids`: today's untimed item indices in display
+/// The Habits page board. `ids`: today's untimed item indices in display
 /// order; `all_day`: titles of all-day Google events (shown as read-only chips).
 pub fn anytime_board(ui: &mut Ui, data: &Data, day: NaiveDate, ids: &[usize], all_day: &[String], state: &mut BoardState, actions: &mut Vec<Action>) {
     let now = Instant::now();
@@ -181,24 +199,11 @@ pub fn anytime_board(ui: &mut Ui, data: &Data, day: NaiveDate, ids: &[usize], al
     let age = |id: &str| ages.get(id).copied();
     let mut toggled_now: Vec<String> = Vec::new();
 
-    let done_count = ids.iter().filter(|i| data.items[**i].is_done_on(day)).count();
-    let total = ids.len();
 
-    // Header: title, count, constellation
-    ui.add_space(12.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("ANYTIME TODAY").strong().size(13.0).color(ui.visuals().weak_text_color()));
-        if total > 0 {
-            if done_count == total {
-                ui.label(RichText::new(format!("🏆 All {total} done!")).strong().color(Color32::from_rgb(46, 160, 103)));
-            } else {
-                ui.label(RichText::new(format!("{done_count} / {total}")).strong());
-            }
-            ui.add_space(6.0);
-            constellation(ui, data, ids, day);
-        }
-    });
-    ui.separator();
+    // Header: the constellation is the progress display
+    ui.add_space(6.0);
+    constellation(ui, data, ids, day);
+    ui.add_space(8.0);
 
     if !all_day.is_empty() {
         ui.horizontal_wrapped(|ui| {

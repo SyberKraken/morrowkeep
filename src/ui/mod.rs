@@ -374,7 +374,7 @@ impl App {
             ui.add_space(4.0);
             ui.label(RichText::new("✔ Morrowkeep").strong().size(18.0).color(Color32::from_rgb(46, 160, 103)));
             ui.add_space(12.0);
-            ui.selectable_value(&mut self.view, View::Today, RichText::new("Today").size(15.0));
+            ui.selectable_value(&mut self.view, View::Today, RichText::new("Habits").size(15.0));
             ui.selectable_value(&mut self.view, View::Calendar, RichText::new("Calendar").size(15.0));
             ui.selectable_value(&mut self.view, View::Charts, RichText::new("Charts").size(15.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

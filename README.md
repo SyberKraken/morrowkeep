@@ -4,7 +4,13 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
 
 - **Local-first.** Everything is stored as readable JSON in `Documents\Morrowkeep`. You can edit
   `items.json` by hand; the app notices and reloads.
-- **Today view.** Overdue items, the day's schedule with a "now" line, anytime items and the backlog.
+- **Habits page.**
+  - Today's anytime tasks form a board of large tiles that scale with the window, under a
+    constellation that lights a star per finished task. Click a tile and it flips, fills with
+    color and later moves to a "done" tray.
+  - A right-hand panel holds the calorie and weight entry, today's date, and the backlog
+    (undated items and overdue calendar entries, each with **Do today**).
+  - Timed items live in the Calendar.
 - **Calendar view.** Month grid and week timeline, with a side panel for the selected day.
   Double-click a day or a time slot to create an item there.
 - **Quick add.** Type (or say) things like `leg day tomorrow 6pm for 1h every mon and thu #workout`.

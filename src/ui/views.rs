@@ -127,9 +127,8 @@ fn section(ui: &mut Ui, title: &str, count: usize) {
     ui.separator();
 }
 
-/// Entries for a single day; used by both Today and the calendar's side panel.
-/// `untimed_as_list`: false on Today, where the anytime items are the quest board instead.
-fn day_list(ui: &mut Ui, data: &Data, day: NaiveDate, untimed_as_list: bool, actions: &mut Vec<Action>) {
+/// Entries for a single day, for the calendar's side panel.
+fn day_list(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Action>) {
     let (timed, untimed) = entries_for(data, day);
     let now = Local::now().naive_local();
     let is_today = day == now.date();
@@ -154,9 +153,6 @@ fn day_list(ui: &mut Ui, data: &Data, day: NaiveDate, untimed_as_list: bool, act
         now_line(ui);
     }
 
-    if !untimed_as_list {
-        return;
-    }
     section(ui, if is_today { "ANYTIME TODAY" } else { "ANYTIME" }, untimed.len());
     if untimed.is_empty() {
         ui.label(RichText::new("Nothing here").weak());
@@ -345,102 +341,72 @@ fn weight_row(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mut 
         });
 }
 
-/// Right-hand panel of the Today view: calorie and weight entry.
+/// Backlog in the side panel: undated items plus overdue one-off items from earlier days,
+/// each movable onto today's board.
+fn backlog_list(ui: &mut Ui, data: &Data, actions: &mut Vec<Action>) {
+    let today = Local::now().date_naive();
+    let mut overdue: Vec<usize> = (0..data.items.len())
+        .filter(|i| {
+            let it = &data.items[*i];
+            it.repeat.is_none() && !it.done && it.date.is_some_and(|d| d < today)
+        })
+        .collect();
+    overdue.sort_by_key(|i| data.items[*i].date);
+    let undated: Vec<usize> = (0..data.items.len()).filter(|i| data.items[*i].date.is_none() && !data.items[*i].done).collect();
+    section(ui, "BACKLOG", overdue.len() + undated.len());
+    if overdue.is_empty() && undated.is_empty() {
+        ui.label(RichText::new("Nothing waiting. Overdue calendar items and things without a date show up here.").weak().size(12.5));
+        return;
+    }
+    for i in overdue.into_iter().chain(undated) {
+        let item = &data.items[i];
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(Vec2::new(4.0, 18.0), Sense::hover());
+            ui.painter().rect_filled(r, 2.0, kind_color(&item.kind));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Do today").on_hover_text("Move onto today's board").clicked() {
+                    actions.push(Action::MoveToToday(item.id.clone()));
+                }
+                if let Some(d) = item.date {
+                    ui.label(RichText::new(d.format("%b %-d").to_string()).size(12.0).color(Color32::from_rgb(220, 80, 60)))
+                        .on_hover_text("Overdue");
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let resp = ui.add(egui::Label::new(RichText::new(&item.title)).sense(Sense::click()).truncate());
+                    if resp.on_hover_text("Click to edit").clicked() {
+                        actions.push(Action::Edit(item.id.clone()));
+                    }
+                });
+            });
+        });
+    }
+}
+
+/// Right-hand panel of the Habits page: calorie and weight entry, today's date, backlog.
 pub fn today_side(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, claude_busy: bool, actions: &mut Vec<Action>) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(10.0);
         calorie_card(ui, data, cal, claude_busy, actions);
         ui.add_space(10.0);
         weight_row(ui, data, cal, actions);
+        ui.add_space(8.0);
+        ui.label(RichText::new(Local::now().format("%A, %B %-d").to_string()).weak());
+        backlog_list(ui, data, actions);
         ui.add_space(10.0);
     });
 }
 
-/// Main area of the Today view: header, quest board, overdue, schedule and backlog.
-/// Fills the window; the board's tiles scale with its width.
+/// Main area of the Habits page: the constellation and the board of today's anytime items.
+/// Fills the window; the tiles scale with its width.
 pub fn today(ui: &mut Ui, data: &Data, board: &mut BoardState, actions: &mut Vec<Action>) {
     let today = Local::now().date_naive();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(8.0);
-        let (timed, untimed) = entries_for(data, today);
-        let items: Vec<usize> = timed
-            .iter()
-            .chain(&untimed)
-            .filter_map(|e| if let Entry::Item(i) = e { Some(*i) } else { None })
-            .collect();
-        let done = items.iter().filter(|i| data.items[**i].is_done_on(today)).count();
-        let progress = (!items.is_empty()).then(|| {
-            egui::ProgressBar::new(done as f32 / items.len() as f32)
-                .desired_width(160.0)
-                .text(format!("{done}/{} done", items.len()))
-        });
-        if ui.available_width() >= 560.0 {
-            ui.horizontal(|ui| {
-                ui.heading(today.format("%A, %B %-d").to_string());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(p) = progress {
-                        ui.add(p);
-                    }
-                });
-            });
-        } else {
-            // not enough room side by side: progress goes under the date
-            ui.heading(today.format("%A, %B %-d").to_string());
-            if let Some(p) = progress {
-                ui.add(p);
-            }
-        }
-        // The quest board: today's anytime items as tiles.
+        let (_, untimed) = entries_for(data, today);
         let board_ids: Vec<usize> = untimed.iter().filter_map(|e| if let Entry::Item(i) = e { Some(*i) } else { None }).collect();
         let all_day: Vec<String> =
             untimed.iter().filter_map(|e| if let Entry::Ext(i) = e { Some(data.gcache[*i].title.clone()) } else { None }).collect();
         anytime_board(ui, data, today, &board_ids, &all_day, board, actions);
-
-        // Overdue: unfinished one-off items from earlier days.
-        let mut overdue: Vec<usize> = (0..data.items.len())
-            .filter(|i| {
-                let it = &data.items[*i];
-                it.repeat.is_none() && !it.done && it.date.is_some_and(|d| d < today)
-            })
-            .collect();
-        overdue.sort_by_key(|i| data.items[*i].date);
-        if !overdue.is_empty() {
-            ui.add_space(10.0);
-            ui.label(RichText::new(format!("OVERDUE  {}", overdue.len())).strong().size(13.0).color(Color32::from_rgb(220, 80, 60)));
-            ui.separator();
-            for i in overdue {
-                let item = &data.items[i];
-                ui.horizontal(|ui| {
-                    if ui.small_button("Do today").on_hover_text("Move to today").clicked() {
-                        actions.push(Action::MoveToToday(item.id.clone()));
-                    }
-                    ui.label(RichText::new(item.date.unwrap().format("%b %-d").to_string()).weak().monospace());
-                    entry_row(ui, data, Entry::Item(i), item.date.unwrap(), actions);
-                });
-            }
-        }
-
-        day_list(ui, data, today, false, actions);
-
-        // Backlog: undated, unfinished.
-        let backlog: Vec<usize> = (0..data.items.len()).filter(|i| data.items[*i].date.is_none() && !data.items[*i].done).collect();
-        ui.add_space(10.0);
-        egui::CollapsingHeader::new(RichText::new(format!("BACKLOG (no date)  {}", backlog.len())).strong().size(13.0))
-            .default_open(true)
-            .show(ui, |ui| {
-                if backlog.is_empty() {
-                    ui.label(RichText::new("Add \"someday\" to a quick-add to put things here").weak());
-                }
-                for i in backlog {
-                    let id = data.items[i].id.clone();
-                    ui.horizontal(|ui| {
-                        if ui.small_button("Do today").clicked() {
-                            actions.push(Action::MoveToToday(id));
-                        }
-                        entry_row(ui, data, Entry::Item(i), today, actions);
-                    });
-                }
-            });
         ui.add_space(20.0);
     });
 }
@@ -470,7 +436,7 @@ pub fn day_panel(ui: &mut Ui, data: &Data, day: NaiveDate, actions: &mut Vec<Act
             };
             ui.label(RichText::new(note).italics().color(NOT_LOGGED_COLOR));
         }
-        day_list(ui, data, day, true, actions);
+        day_list(ui, data, day, actions);
     });
 }
 
