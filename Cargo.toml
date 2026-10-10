@@ -2,6 +2,7 @@
 name = "morrowkeep"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Personal planner for tasks, chores, meals and workouts. Local JSON files, Google Calendar mirror."
 
 [features]

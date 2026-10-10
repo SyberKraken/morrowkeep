@@ -136,3 +136,8 @@ the selected day (in Calendar view).
 
 Turn on **Settings > Window > Start with Windows**. It adds `morrowkeep.exe --hidden` to your user's
 Run key, so Morrowkeep starts in the tray.
+
+## License
+
+[MIT](LICENSE). The vendored `vendor/whisper-rs-sys` (including whisper.cpp) keeps its own
+license files.
