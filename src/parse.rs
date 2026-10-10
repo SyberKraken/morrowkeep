@@ -2,7 +2,7 @@
 //!
 //! Example: "Leg day tomorrow at 6pm for 1 hour every mon and thu #workout"
 
-use crate::model::{parse_weekday, small_number, Repeat, KINDS};
+use crate::model::{parse_weekday, small_number, Repeat};
 use chrono::{Datelike, Duration, NaiveDate, NaiveTime};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -320,7 +320,7 @@ pub fn parse_quick(input: &str, today: NaiveDate) -> Parsed {
         }
         if i == 0 {
             if let Some(k) = raw[0].strip_suffix(':').map(|k| k.to_lowercase()) {
-                if KINDS.contains(&k.as_str()) {
+                if crate::categories::get(&k).is_some() {
                     p.kind = Some(k);
                     i += 1;
                     continue;

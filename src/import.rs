@@ -528,6 +528,7 @@ pub fn ai_context(data: &Data, days_ahead: i64) -> String {
                 0 => {}
                 k => t += &format!(" Daily calorie limit: {k} kcal."),
             }
+            t += &format!("\n\nCategories (use these as \"kind\"): {}.", crate::categories::names().join(", "));
             t
         },
         serde_json::to_string_pretty(&relevant).unwrap_or_default(),

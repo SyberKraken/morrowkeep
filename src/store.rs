@@ -98,6 +98,10 @@ pub struct Settings {
     pub claude_path: String,
     /// Model alias passed to Claude Code: haiku, sonnet or opus.
     pub claude_model: String,
+    /// Task categories (item kinds): icon, color and streak style. Edited in Settings.
+    pub categories: Vec<crate::categories::Category>,
+    /// Your colors for calories and weight (over the theme's).
+    pub colors: crate::categories::ColorOverrides,
 }
 
 impl Default for Settings {
@@ -127,6 +131,8 @@ impl Default for Settings {
             default_input_mode: "local".into(),
             claude_path: String::new(),
             claude_model: "sonnet".into(),
+            categories: crate::categories::defaults(),
+            colors: Default::default(),
         }
     }
 }
@@ -206,7 +212,9 @@ impl Data {
         // Keep a copy of the import spec next to the data so AI tools / you can find it.
         let _ = fs::write(paths.root.join("IMPORT_FORMAT.md"), IMPORT_FORMAT);
 
-        let settings: Settings = read_json(&paths.settings).ok().flatten().unwrap_or_default();
+        let mut settings: Settings = read_json(&paths.settings).ok().flatten().unwrap_or_default();
+        crate::categories::normalize(&mut settings.categories);
+        crate::categories::apply(&settings.categories, &settings.colors);
         let (body, body_error) = match read_json(&paths.body) {
             Ok(Some(b)) => (b, None),
             // first run with body.json: carry over the limit from settings.json

@@ -6,6 +6,7 @@ mod charts;
 mod streaks;
 pub mod theme;
 mod dialogs;
+mod settings;
 mod views;
 
 use crate::model::{Item, Repeat};
@@ -15,7 +16,7 @@ use crate::store::Data;
 use crate::tray;
 use crate::worker::{Job, UiHandle};
 use chrono::{Local, NaiveDate, NaiveTime};
-use dialogs::{Editor, ImportDlg, SettingsDlg};
+use dialogs::{Editor, ImportDlg};
 use eframe::egui::{self, Color32, Id, RichText};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -27,6 +28,7 @@ enum View {
     Calendar,
     Charts,
     Body,
+    Settings,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -56,8 +58,9 @@ pub struct CalorieInput {
     pub weight: String,
 }
 
+/// A category's color: yours from Settings, else the theme's.
 pub fn kind_color(kind: &str) -> Color32 {
-    theme::th().kind(kind)
+    crate::categories::color(kind).unwrap_or_else(|| theme::th().kind(kind))
 }
 
 // Colors that identify a kind of data. All come from the current theme (see theme.rs).
@@ -68,10 +71,10 @@ pub fn claude_color() -> Color32 {
     theme::th().data.claude
 }
 pub fn calorie_color() -> Color32 {
-    theme::th().data.calories
+    crate::categories::calorie_color().unwrap_or_else(|| theme::th().data.calories)
 }
 pub fn weight_color() -> Color32 {
-    theme::th().data.weight
+    crate::categories::weight_color().unwrap_or_else(|| theme::th().data.weight)
 }
 /// Muted ink for "nothing logged" notes.
 pub fn not_logged_color() -> Color32 {
@@ -103,7 +106,8 @@ pub struct App {
     focus_quick: bool,
     editor: Option<Editor>,
     import: Option<ImportDlg>,
-    settings: Option<SettingsDlg>,
+    /// The Settings tab (kept while switching tabs, so unsaved changes survive).
+    settings: Option<settings::SettingsPage>,
     /// Running Claude request: (what was asked, result channel, start time, came from the
     /// calorie card's food box).
     claude_job: Option<(String, mpsc::Receiver<Result<String, String>>, std::time::Instant, bool)>,
@@ -313,7 +317,7 @@ impl App {
     /// Day that quick-add uses when the text has no date.
     fn default_day(&self) -> NaiveDate {
         match self.view {
-            View::Today | View::Charts | View::Body => Local::now().date_naive(),
+            View::Today | View::Charts | View::Body | View::Settings => Local::now().date_naive(),
             View::Calendar => self.selected,
         }
     }
@@ -528,6 +532,15 @@ impl App {
         }
     }
 
+    /// Switches to the Settings tab (optionally at a section).
+    fn open_settings(&mut self, data: &Data, section: Option<settings::Section>) {
+        let page = self.settings.get_or_insert_with(|| settings::SettingsPage::open(data));
+        if let Some(s) = section {
+            page.section = s;
+        }
+        self.view = View::Settings;
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui, data: &mut Data) {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
@@ -536,8 +549,14 @@ impl App {
             ui.add_space(14.0);
             tab_bar(ui, &mut self.view);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("⚙ Settings").clicked() {
-                    self.settings = Some(SettingsDlg::open(data));
+                let unsaved = self.settings.as_ref().is_some_and(|s| s.dirty(data));
+                let label = if unsaved { "⚙ Settings •" } else { "⚙ Settings" };
+                if ui
+                    .add(egui::Button::new(label).selected(self.view == View::Settings))
+                    .on_hover_text(if unsaved { "Settings (unsaved changes)" } else { "Settings" })
+                    .clicked()
+                {
+                    self.open_settings(data, None);
                 }
                 if ui.button("📥 Import").on_hover_text("Paste JSON from your AI tools").clicked() {
                     self.import = Some(ImportDlg::default());
@@ -666,8 +685,8 @@ impl App {
             Voice::Idle => {
                 if ui.button("🎤").on_hover_text("Dictate (click again to stop)").clicked() {
                     if !model.exists() {
-                        data.status = "Voice model not downloaded yet. Open Settings > Voice input.".into();
-                        self.settings = Some(SettingsDlg::open(data));
+                        data.status = "Voice model not downloaded yet. Download it under Settings > Input & voice.".into();
+                        self.open_settings(data, Some(settings::Section::Input));
                     } else {
                         match crate::voice::Recorder::start() {
                             Ok(r) => self.voice = Voice::Recording(r, std::time::Instant::now()),
@@ -740,7 +759,7 @@ impl eframe::App for App {
                 .filter_map(|e| if let egui::Event::Text(t) = e { Some(t.as_str()) } else { None })
                 .collect()
         });
-        let no_dialog = self.editor.is_none() && self.import.is_none() && self.settings.is_none();
+        let no_dialog = self.editor.is_none() && self.import.is_none();
         // Only when no text box is taking keyboard input (a focused button or tile doesn't count).
         if !typed.is_empty() && no_dialog && !ctx.wants_keyboard_input() {
             self.quick.push_str(&typed);
@@ -787,6 +806,11 @@ impl eframe::App for App {
             View::Body => {
                 egui::CentralPanel::default().show(ctx, |ui| body::body(ui, &mut data, &mut self.body_ui));
             }
+            View::Settings => {
+                let page = self.settings.get_or_insert_with(|| settings::SettingsPage::open(&data));
+                egui::SidePanel::left("settings_nav").resizable(false).exact_width(210.0).show(ctx, |ui| page.nav(ui, &data));
+                egui::CentralPanel::default().show(ctx, |ui| page.show(ui, &mut data, &self.jobs));
+            }
             View::Calendar => {
                 egui::SidePanel::right("day_panel").resizable(true).default_width(330.0).min_width(240.0).show(ctx, |ui| {
                     views::day_panel(ui, &data, self.selected, &mut actions);
@@ -816,11 +840,6 @@ impl eframe::App for App {
         if let Some(mut dlg) = self.import.take() {
             if dlg.show(ctx, &mut data) {
                 self.import = Some(dlg);
-            }
-        }
-        if let Some(mut dlg) = self.settings.take() {
-            if dlg.show(ctx, &mut data, &self.jobs) {
-                self.settings = Some(dlg);
             }
         }
 

@@ -4,7 +4,6 @@
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Weekday};
 use serde::{Deserialize, Serialize};
 
-pub const KINDS: &[&str] = &["task", "chore", "meal", "workout", "event", "habit"];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Item {

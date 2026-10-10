@@ -1,16 +1,9 @@
 //! Completion history as streaks.
 //!
 //! Each recurring task gets a row of nodes (one per occurrence: daily tasks every day, weekly
-//! tasks once a week). Consecutive completed occurrences form a streak, drawn in a style that
-//! depends on the task's kind:
-//!
-//! | kind                 | style                                                       |
-//! |----------------------|-------------------------------------------------------------|
-//! | workout              | ribbon: thickens as the streak grows                        |
-//! | meal                 | comet: the live streak is a bright head, older days fade    |
-//! | chore                | arcs: each day hops to the next, hops grow with the streak  |
-//! | habit                | vine: a winding stem that sprouts leaves at milestones      |
-//! | task, event, other   | constellation: zig-zag with a 4-point star every 7th day    |
+//! tasks once a week). Consecutive completed occurrences form a streak, drawn in the style its
+//! category has in Settings (see [`crate::categories::StreakStyle`]):
+//! ribbon, comet, arcs, vine or constellation.
 //!
 //! Missed occurrences are hollow grey rings; today, while not yet done, is a pending ring.
 //! One-off tasks get a final row of small stars on the day they were finished.
@@ -46,23 +39,39 @@ struct Node {
     run: u32,
 }
 
-#[derive(Clone, Copy)]
-enum Style {
-    Ribbon,
-    Comet,
-    Arcs,
-    Vine,
-    Constellation,
-}
+use crate::categories::StreakStyle as Style;
 
 fn style_for(kind: &str) -> Style {
-    match kind {
-        "workout" => Style::Ribbon,
-        "meal" => Style::Comet,
-        "chore" => Style::Arcs,
-        "habit" => Style::Vine,
-        _ => Style::Constellation,
-    }
+    crate::categories::style(kind)
+}
+
+/// A small sample streak in `style` (for the category editor).
+pub fn style_preview(ui: &mut Ui, style: Style, color: Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(150.0, 30.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let faint = with_alpha(ui.visuals().weak_text_color(), 0.9);
+    let states = [State::Done, State::Done, State::Done, State::Missed, State::Done, State::Done, State::Done, State::Done, State::Done, State::Pending];
+    let step = rect.width() / states.len() as f32;
+    let cy = rect.center().y + if matches!(style, Style::Arcs) { 6.0 } else { 0.0 };
+    let mut run = 0;
+    let day = Local::now().date_naive();
+    let nodes: Vec<Node> = states
+        .iter()
+        .enumerate()
+        .map(|(k, s)| {
+            run = match s {
+                State::Done => run + 1,
+                State::Missed => 0,
+                State::Pending => run,
+            };
+            let zig = if matches!(style, Style::Constellation) { if k % 2 == 0 { -4.0 } else { 4.0 } } else { 0.0 };
+            // runs scaled up so milestones (leaves, stars) show in a short sample
+            let shown = if *s == State::Done { run * 3 + 1 } else { 0 };
+            Node { day, pos: Pos2::new(rect.left() + step * (k as f32 + 0.5), cy + zig), state: *s, run: shown }
+        })
+        .collect();
+    draw_row(&painter, &nodes, color, style, 0.5, faint);
+    resp
 }
 
 fn with_alpha(c: Color32, a: f32) -> Color32 {
@@ -304,11 +313,8 @@ pub fn streaks_section(ui: &mut Ui, data: &Data, period_days: i64) {
         }
         ui.label(RichText::new(note).weak());
     });
-    ui.label(
-        RichText::new("workout = ribbon · meal = comet · chore = arcs · habit = vine · other = constellation")
-            .weak()
-            .size(12.0),
-    );
+    let legend: Vec<String> = crate::categories::names().iter().map(|k| format!("{k} = {}", style_for(k).label().to_lowercase())).collect();
+    ui.label(RichText::new(legend.join(" · ")).weak().size(12.0)).on_hover_text("Change styles in Settings > Categories");
     ui.add_space(4.0);
     if recurring.is_empty() && data.items.iter().all(|i| i.completed_on().is_none_or(|d| d < from)) {
         empty_state(ui, "No streaks yet", "Give a task a repeat rule, like \"daily\" or \"every mon and thu\", and its streak starts here.");

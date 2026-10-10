@@ -50,12 +50,12 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   `weight.json`). It shows the change since your last weigh-in, and how far you are from your
   goal.
 - **Streaks** (top of the Charts tab). One row per recurring task, with consecutive completions
-  drawn as a streak in a style per kind:
-  - workout: a ribbon that thickens
-  - meal: comets, with the live streak glowing
-  - chore: hopping arcs
-  - habit: a vine that sprouts leaves at milestones
-  - other: a constellation with a 4-point star every 7th day
+  drawn as a streak in the style of the task's category (set in Settings > Categories):
+  - ribbon: thickens as the streak grows (default for workout)
+  - comet: the live streak glows, older days fade (meal)
+  - arcs: hops from day to day (chore)
+  - vine: sprouts leaves at milestones (habit)
+  - constellation: a 4-point star every 7th day (everything else)
 
   Missed days are hollow rings, and today pulses until done. One-off tasks appear as small stars
   on the day they were finished.
@@ -78,8 +78,16 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
     Settings > Reminders.
   - Morrowkeep keeps its Start menu shortcut tagged with its notification ID. Windows needs that to
     show the notifications in the notification panel.
-- **Look and feel.** A night-sky theme with the Inter font. Themes and fonts can be switched
-  under Settings > Appearance (see [Themes](#themes)).
+- **Settings tab.** A full page with sections on the left (General, Appearance, Categories,
+  Input & voice, Reminders, Google Calendar). Changes are a draft until you press Save (or
+  Ctrl+S); Revert throws them away, and the Settings button shows a dot while something is
+  unsaved.
+- **Categories.** Your task kinds, edited under Settings > Categories: name, icon, color (or the
+  theme's) and streak style, with a live preview of the style. Renaming one moves its tasks
+  along; deleting one turns its tasks into plain `task`s. Add your own (e.g. `study`) and use it
+  with `#study`; kinds your tasks already use show up as one-click "add" buttons.
+- **Look and feel.** A night-sky theme with the Inter font. Themes, fonts and your own calorie
+  and weight colors are under Settings > Appearance (see [Themes](#themes)).
 - **Small moments of delight.** A finished tile flips and throws a burst of sparkles, its star
   in the constellation ignites, totals count to their new value, and messages appear as short
   toasts. All of it can be slowed down, sped up or turned off in the theme (`motion`).
@@ -113,7 +121,7 @@ LLVM (see the comment in `Cargo.toml`).
 | `items.json` | All your items. This is the master copy. |
 | `calories.json` | Calorie log, one entry per food or drink. Daily totals are summed from it. |
 | `weight.json` | Weight log, one entry per day. |
-| `settings.json` | Settings. Editable in the app. |
+| `settings.json` | Settings, including your categories and color choices. Editable on the Settings tab. |
 | `body.json` | Body profile, goal weight (with earlier goals) and the fallback calorie limit. Editable on the Body tab. |
 | `inbox/` | Drop import `.json` files here. They are moved to `imported/`, or to `failed/` with an `.errors.txt`. |
 | `backups/` | Daily copies of `items.json`, `calories.json` and `weight.json`, keeping 14 days of each. |
@@ -142,7 +150,7 @@ deleted in Morrowkeep are deleted from Google.
 ## Claude input mode (uses your Claude plan, not API credits)
 
 Press **Tab** in the entry bar (or click its **Local/Claude** chip) to switch for the current
-session. Set the mode Morrowkeep starts in under **Settings > Input mode**.
+session. Set the mode Morrowkeep starts in under **Settings > Input & voice**.
 In Claude mode, what you type or dictate goes to Claude Code (`claude -p`), signed in with your
 own Claude account. The usage counts toward your Pro limits, the same pool as claude.ai. Claude
 gets the import format, today's date and your upcoming items, and replies with import JSON.
@@ -161,7 +169,7 @@ your own subscription.
 
 Start typing anywhere in the window and it goes into the entry bar, unless another text box is
 active. **Tab** switches between Local and Claude while you type, and Esc clears the bar. The
-mode it starts in is set under Settings > Input mode. In **Local** mode (free, offline) it
+mode it starts in is set under Settings > Input & voice. In **Local** mode (free, offline) it
 understands:
 
 | you type | does |
@@ -185,7 +193,7 @@ goes to Claude, which can plan, log food, record weight and tick off tasks.
 | `for 45 minutes`, `1h30m`, `for an hour` | duration |
 | `every day`, `weekdays`, `every mon and thu`, `every 2 weeks`, `monthly` | repeat |
 | `until dec 31` | end of repeat |
-| `#workout`, `#chore`, `#meal`, or a leading `Workout:` | kind |
+| `#workout`, `#chore`, `#meal`, any `#category`, or a leading `Workout:` | category (kind) |
 | `someday` / `backlog` | no date |
 
 Anything else becomes the title. Without a date, the item goes on today (or on the selected day
@@ -212,7 +220,7 @@ files always list every option. Sections:
 | `text` | `primary`, `muted`, `on_color` (text on filled tiles and chips) |
 | `widget` | buttons (`fill`, `fill_hover`, `fill_active`, `border`, `border_hover`), `selection`, `link` |
 | `status` | `success` (done, all done), `danger` (over budget, errors), `warning` (cautions such as a too-fast goal), `danger_background` |
-| `kinds` | one color per task kind; add any custom kind name, and unknown kinds use `other` |
+| `kinds` | default color per category; a color picked in Settings > Categories wins. Unknown kinds use `other` |
 | `data` | `brand` (logo and name), `today` (today's ring in the calendar), `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line`, `goal` (goal line, star, planned path), `trend` (7-day average and projection) |
 | `sky` | the star field: `star` color (alpha = max brightness) and `density` (0 = off) |
 | `shape` | `card_radius`, `tile_radius`, `widget_radius` |

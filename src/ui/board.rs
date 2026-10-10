@@ -48,16 +48,9 @@ pub struct BoardState {
     ignited: HashMap<String, Instant>,
 }
 
-pub fn kind_icon(kind: &str) -> &'static str {
-    match kind {
-        "workout" => "💪",
-        "meal" => "🍴",
-        "chore" => "🏠",
-        "habit" => "🔁",
-        "event" => "📅",
-        "task" => "📌",
-        _ => "⭐",
-    }
+/// A category's icon (from Settings > Categories).
+pub fn kind_icon(kind: &str) -> String {
+    crate::categories::icon(kind)
 }
 
 fn wrapped(text: &str, size: f32, color: Color32, width: f32, rows: usize) -> LayoutJob {
