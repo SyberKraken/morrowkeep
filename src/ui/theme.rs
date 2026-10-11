@@ -272,6 +272,9 @@ pub struct DataColors {
     /// The 7-day average weight line and its projection.
     #[serde(with = "hex")]
     pub trend: Color32,
+    /// Journal: its star, entry markers and accents.
+    #[serde(with = "hex")]
+    pub journal: Color32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -348,6 +351,7 @@ impl Default for DataColors {
             chart_limit_line: rgb(150, 150, 150),
             goal: rgb(80, 200, 160),
             trend: rgb(150, 190, 255),
+            journal: rgb(226, 132, 196),
         }
     }
 }
@@ -451,6 +455,7 @@ fn daylight() -> Theme {
             chart_limit_line: rgb(140, 140, 150),
             goal: rgb(20, 150, 110),
             trend: rgb(20, 60, 150),
+            journal: rgb(178, 62, 140),
         },
         sky: Sky { star: Color32::from_rgba_unmultiplied(90, 105, 150, 90), density: 0.6 },
         shape: Shape::default(),

@@ -422,6 +422,8 @@ pub enum Command {
     Weight(f32),
     /// "goal 76 kg by feb 1", "target weight 76", "goal weight 75.5 kg by 2027-03-01"
     Goal { kg: f32, by: Option<String> },
+    /// "journal: long walk, felt good", "dear diary …"
+    Journal(String),
     /// "done vacuum", "did push-ups": tick off a matching task for today
     Done(String),
     /// "ate a chicken burrito": food without a number, for a Claude estimate
@@ -463,6 +465,15 @@ pub fn parse_command(input: &str) -> Option<Command> {
     }
     let rest_after = |n: usize| raw.get(n..).map(|r| r.join(" ")).unwrap_or_default();
 
+    // journal entry
+    if (matches!(toks[0], "journal" | "journal:" | "diary" | "diary:") && toks.len() > 1) || lower.starts_with("dear diary") {
+        let skip = if lower.starts_with("dear diary") { 2 } else { 1 };
+        let rest = rest_after(skip);
+        let rest = rest.trim_start_matches([':', ',']).trim().to_string();
+        if !rest.is_empty() {
+            return Some(Command::Journal(rest));
+        }
+    }
     // done / did <task>
     if matches!(toks[0], "done" | "did" | "finished" | "completed") && toks.len() > 1 {
         return Some(Command::Done(rest_after(1)));
@@ -616,6 +627,8 @@ mod tests {
         assert_eq!(parse_command("kcal 250 apple"), Some(Command::Calories { kcal: 250, what: "apple".into() }));
         assert_eq!(parse_command("snack 180kcal"), Some(Command::Calories { kcal: 180, what: "Snack".into() }));
         assert_eq!(parse_command("82,4 kg"), Some(Command::Weight(82.4)));
+        assert_eq!(parse_command("journal: long walk, felt good #walk"), Some(Command::Journal("long walk, felt good #walk".into())));
+        assert_eq!(parse_command("Dear diary, today was 82 kg of fun"), Some(Command::Journal("today was 82 kg of fun".into())));
         assert_eq!(parse_command("goal 76 kg by feb 1"), Some(Command::Goal { kg: 76.0, by: Some("feb 1".into()) }));
         assert_eq!(parse_command("target weight 75,5"), Some(Command::Goal { kg: 75.5, by: None }));
         assert_eq!(parse_command("goal 74kg 2027-03-01"), Some(Command::Goal { kg: 74.0, by: Some("2027-03-01".into()) }));

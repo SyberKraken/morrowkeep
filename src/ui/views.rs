@@ -440,12 +440,14 @@ fn backlog_list(ui: &mut Ui, data: &Data, actions: &mut Vec<Action>) {
 }
 
 /// Right-hand panel of the Habits page: calorie and weight entry, today's date, backlog.
-pub fn today_side(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, actions: &mut Vec<Action>) {
+pub fn today_side(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, journal: &mut super::journal::JournalUi, actions: &mut Vec<Action>) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(10.0);
         calorie_card(ui, data, cal, actions);
         ui.add_space(10.0);
         weight_row(ui, data, cal, actions);
+        ui.add_space(10.0);
+        journal.quick_card(ui, data, actions);
         ui.add_space(8.0);
         ui.label(RichText::new(Local::now().format("%A, %B %-d").to_string()).weak());
         backlog_list(ui, data, actions);

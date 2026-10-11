@@ -5,6 +5,7 @@ mod body;
 mod categories;
 mod claude;
 mod gcal;
+mod journal;
 mod import;
 mod model;
 mod notify;

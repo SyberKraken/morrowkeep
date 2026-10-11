@@ -16,6 +16,9 @@ pub struct Paths {
     pub items: PathBuf,
     pub calories: PathBuf,
     pub weight: PathBuf,
+    pub journal: PathBuf,
+    /// Journal voice recordings (WAV).
+    pub journal_audio: PathBuf,
     pub settings: PathBuf,
     pub body: PathBuf,
     pub token: PathBuf,
@@ -38,6 +41,8 @@ impl Paths {
             items: root.join("items.json"),
             calories: root.join("calories.json"),
             weight: root.join("weight.json"),
+            journal: root.join("journal.json"),
+            journal_audio: root.join("journal-audio"),
             settings: root.join("settings.json"),
             body: root.join("body.json"),
             token: root.join("google_token.json"),
@@ -150,6 +155,13 @@ pub struct SyncState {
 }
 
 #[derive(Serialize, Deserialize)]
+struct JournalFile {
+    #[serde(default)]
+    version: u32,
+    entries: Vec<crate::journal::JournalEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
 struct WeightFile {
     #[serde(default)]
     version: u32,
@@ -177,6 +189,8 @@ pub struct Data {
     pub calories: Vec<CalorieEntry>,
     /// Sorted by date, at most one per day.
     pub weights: Vec<WeightEntry>,
+    /// Journal entries, sorted by date and time.
+    pub journal: Vec<crate::journal::JournalEntry>,
     pub settings: Settings,
     /// Profile, goal weight and fallback calorie limit (body.json).
     pub body: crate::body::Body,
@@ -193,6 +207,7 @@ pub struct Data {
     items_mtime: Option<SystemTime>,
     calories_mtime: Option<SystemTime>,
     weight_mtime: Option<SystemTime>,
+    journal_mtime: Option<SystemTime>,
 }
 
 impl Data {
@@ -232,6 +247,7 @@ impl Data {
             items: Vec::new(),
             calories: Vec::new(),
             weights: Vec::new(),
+            journal: Vec::new(),
             settings,
             body,
             body_error,
@@ -243,6 +259,7 @@ impl Data {
             items_mtime: None,
             calories_mtime: None,
             weight_mtime: None,
+            journal_mtime: None,
         };
         if !data.paths.settings.exists() {
             data.save_settings();
@@ -260,7 +277,15 @@ impl Data {
         self.items_mtime = mtime(&self.paths.items);
         self.calories_mtime = mtime(&self.paths.calories);
         self.weight_mtime = mtime(&self.paths.weight);
+        self.journal_mtime = mtime(&self.paths.journal);
         let mut errors = Vec::new();
+        match read_json::<JournalFile>(&self.paths.journal) {
+            Ok(f) => {
+                self.journal = f.map(|f| f.entries).unwrap_or_default();
+                self.journal.sort_by_key(|e| (e.date, e.time));
+            }
+            Err(e) => errors.push(format!("journal.json could not be read: {e}")),
+        }
         match read_json::<ItemsFile>(&self.paths.items) {
             Ok(f) => self.items = f.map(|f| f.items).unwrap_or_default(),
             Err(e) => errors.push(format!("items.json could not be read: {e}")),
@@ -293,6 +318,23 @@ impl Data {
         changed(&self.paths.items, self.items_mtime)
             || changed(&self.paths.calories, self.calories_mtime)
             || changed(&self.paths.weight, self.weight_mtime)
+            || changed(&self.paths.journal, self.journal_mtime)
+    }
+
+    pub fn save_journal(&mut self) {
+        if self.load_error.is_some() {
+            return;
+        }
+        self.journal.sort_by_key(|e| (e.date, e.time));
+        let file = JournalFile { version: 1, entries: self.journal.clone() };
+        match write_json(&self.paths.journal, &file) {
+            Ok(()) => self.journal_mtime = mtime(&self.paths.journal),
+            Err(e) => self.status = format!("Saving the journal failed: {e}"),
+        }
+    }
+
+    pub fn journal_on(&self, day: chrono::NaiveDate) -> usize {
+        self.journal.iter().filter(|e| e.date == day && e.kind == "note").count()
     }
 
     pub fn save_weight(&mut self) {
@@ -498,7 +540,7 @@ impl Data {
     /// Copies items.json, calories.json and weight.json to backups/<name>-YYYY-MM-DD.json once a day,
     /// keeping two weeks of each.
     fn daily_backup(&self) {
-        for (prefix, file) in [("items", &self.paths.items), ("calories", &self.paths.calories), ("weight", &self.paths.weight)] {
+        for (prefix, file) in [("items", &self.paths.items), ("calories", &self.paths.calories), ("weight", &self.paths.weight), ("journal", &self.paths.journal)] {
             if !file.exists() {
                 continue;
             }

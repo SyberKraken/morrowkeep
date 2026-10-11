@@ -78,6 +78,24 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
     Settings > Reminders.
   - Morrowkeep keeps its Start menu shortcut tagged with its notification ID. Windows needs that to
     show the notifications in the notification panel.
+- **Journal tab.** Write entries or record voice notes:
+  - **Voice entries:** the recording is kept as a WAV file (`journal-audio\`). Whisper transcribes
+    it on this PC in the background, and the transcript shows under it, editable. **▶ Play** opens
+    the recording in your audio player.
+  - **Each entry** can have a mood (rough to great) and #tags. It can be pinned, edited or
+    deleted; a deleted recording is moved to `journal-audio\deleted\`, not erased.
+  - **Browsing:** days are listed newest first, with "Show older days" to page back. A mini
+    calendar marks the days you wrote and jumps to any of them.
+  - **Search** covers every entry and transcript, with Pinned/Voice filters and your most-used
+    tags as one-click searches.
+  - **Writing prompts**, a "days in a row" streak, word counts, and **On this day** (what you
+    wrote a month, 3 months and a year ago).
+  - **✨ Reflect on my week:** sends the last 7 days to Claude and adds its short reflection as an
+    entry. This is the only time journal text is sent to Claude.
+  - **Export to Markdown** writes the whole journal to `journal-export.md`.
+  - On the **Habits page**, a quick journal card (type or 🎤) adds an entry, and any entry today
+    lights the *journal* star in the constellation. In the entry bar, `journal: …` or
+    `dear diary …` saves an entry too. Typing anywhere on the Journal page starts an entry.
 - **Settings tab.** A full page with sections on the left (General, Appearance, Categories,
   Input & voice, Reminders, Google Calendar). Changes are a draft until you press Save (or
   Ctrl+S); Revert throws them away, and the Settings button shows a dot while something is
@@ -121,10 +139,12 @@ LLVM (see the comment in `Cargo.toml`).
 | `items.json` | All your items. This is the master copy. |
 | `calories.json` | Calorie log, one entry per food or drink. Daily totals are summed from it. |
 | `weight.json` | Weight log, one entry per day. |
+| `journal.json` | Journal entries (text, mood, transcripts). |
+| `journal-audio/` | Journal voice recordings (WAV). |
 | `settings.json` | Settings, including your categories and color choices. Editable on the Settings tab. |
 | `body.json` | Body profile, goal weight (with earlier goals) and the fallback calorie limit. Editable on the Body tab. |
 | `inbox/` | Drop import `.json` files here. They are moved to `imported/`, or to `failed/` with an `.errors.txt`. |
-| `backups/` | Daily copies of `items.json`, `calories.json` and `weight.json`, keeping 14 days of each. |
+| `backups/` | Daily copies of `items.json`, `calories.json`, `weight.json` and `journal.json`, keeping 14 days of each. |
 | `models/` | Whisper voice models. |
 | `google_token.json` | Google sign-in token. Delete it to disconnect. |
 | `google_events_cache.json`, `sync_state.json` | Sync bookkeeping. |
@@ -176,6 +196,7 @@ understands:
 |---|---|
 | `450 kcal pasta`, `+450`, `kcal 300 snack` | logs calories |
 | `82.4 kg`, `weight 82,4`, `weighed 82.4` | logs today's weight |
+| `journal: long walk, felt good`, `dear diary …` | adds a journal entry |
 | `goal 76 kg by feb 1`, `target weight 75.5` | sets your goal weight (without a date: 0.5 kg a week) |
 | `done vacuum`, `did push-ups` | ticks off the matching task for today |
 | `ate a chicken burrito`, `I had a banana` | estimates the calories with Claude, then shows them for review |
@@ -232,7 +253,7 @@ files always list every option. Sections:
 | `widget` | buttons (`fill`, `fill_hover`, `fill_active`, `border`, `border_hover`), `selection`, `link` |
 | `status` | `success` (done, all done), `danger` (over budget, errors), `warning` (cautions such as a too-fast goal), `danger_background` |
 | `kinds` | default color per category; a color picked in Settings > Categories wins. Unknown kinds use `other` |
-| `data` | `brand` (logo and name), `today` (today's ring in the calendar), `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line`, `goal` (goal line, star, planned path), `trend` (7-day average and projection) |
+| `data` | `brand` (logo and name), `today` (today's ring in the calendar), `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line`, `goal` (goal line, star, planned path), `trend` (7-day average and projection), `journal` |
 | `sky` | the star field: `star` color (alpha = max brightness) and `density` (0 = off) |
 | `shape` | `card_radius`, `tile_radius`, `widget_radius` |
 | `charts` | `line_fill_alpha` (area under the weight line, 0 = none) and `bar_radius` (rounded bar tops) |

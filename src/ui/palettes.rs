@@ -90,6 +90,7 @@ fn build(p: &Palette) -> Theme {
             chart_limit_line: muted,
             goal: cyan,
             trend: mix(blue, fg, 0.4),
+            journal: mix(purple, red, 0.45),
         },
         sky: if dark { Sky { star: with_alpha(fg, 110), density: 0.7 } } else { Sky { star: with_alpha(muted, 80), density: 0.5 } },
         shape: Shape::default(),

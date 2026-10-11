@@ -177,6 +177,7 @@ fn constellation(ui: &mut Ui, data: &Data, ids: &[usize], day: NaiveDate, state:
     let mut stars = vec![
         Star { lit: kcal_logged, color: calorie_color(), label: Some("kcal"), key: "kcal".into() },
         Star { lit: weight_logged, color: weight_color(), label: Some("kg"), key: "kg".into() },
+        Star { lit: data.journal_on(day) > 0, color: super::journal::journal_color(), label: Some("journal"), key: "journal".into() },
     ];
     stars.extend(ids.iter().map(|i| {
         let item = &data.items[*i];

@@ -17,6 +17,7 @@ pub enum Op {
     LogWeight(WeightEntry),
     DeleteCalories { id: String, label: String },
     Settings(Box<SettingsChange>),
+    Journal(crate::journal::JournalEntry),
 }
 
 impl Op {
@@ -48,6 +49,7 @@ impl Op {
             Op::DeleteCalories { label, .. } => format!("- remove calories {label}"),
             Op::LogWeight(w) => format!("+ weight {:.1} kg · {}", w.kg, w.date.format("%a %b %-d")),
             Op::Settings(s) => s.lines.join("\n"),
+            Op::Journal(e) => format!("+ journal {} {} · {}", e.date.format("%a %b %-d"), e.time.format("%H:%M"), e.text),
         }
     }
 }
@@ -141,6 +143,18 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
                 None => {}
                 Some(_) => plan.errors.push("\"calories\" must be an array".into()),
             }
+            match o.remove("journal") {
+                Some(Value::Array(a)) => {
+                    for (n, v) in a.into_iter().enumerate() {
+                        match journal_from(v, today) {
+                            Ok(e) => plan.ops.push(Op::Journal(e)),
+                            Err(e) => plan.errors.push(format!("journal {}: {e}", n + 1)),
+                        }
+                    }
+                }
+                None => {}
+                Some(_) => plan.errors.push("\"journal\" must be an array".into()),
+            }
             if let Some(s) = o.remove("settings") {
                 match settings_from(s, settings, existing) {
                     Ok(change) => plan.ops.push(Op::Settings(Box::new(change))),
@@ -153,7 +167,7 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
                 plan.message = Some(m);
             }
             for k in o.keys() {
-                plan.errors.push(format!("unknown top-level field \"{k}\" (expected \"items\", \"calories\", \"weight\", \"settings\", \"delete\", \"message\")"));
+                plan.errors.push(format!("unknown top-level field \"{k}\" (expected \"items\", \"calories\", \"weight\", \"journal\", \"settings\", \"delete\", \"message\")"));
             }
             (items, deletes)
         }
@@ -414,6 +428,7 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
     let (mut kcal, mut cal_changed) = (0u32, false);
     let mut weights = 0;
     let mut settings_note = None;
+    let mut journals = 0;
     for op in ops {
         match op {
             Op::Add(item) => {
@@ -443,6 +458,11 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
             Op::LogWeight(w) => {
                 data.set_weight(w.date, Some(w.kg));
                 weights += 1;
+            }
+            Op::Journal(e) => {
+                data.journal.push(e);
+                data.save_journal();
+                journals += 1;
             }
             Op::Settings(change) => {
                 let SettingsChange { mut new, renames, deletes, .. } = *change;
@@ -475,6 +495,9 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
     }
     if weights > 0 {
         parts.push(format!("{weights} weight entr{}", if weights == 1 { "y" } else { "ies" }));
+    }
+    if journals > 0 {
+        parts.push(format!("{journals} journal entr{}", if journals == 1 { "y" } else { "ies" }));
     }
     parts.extend(settings_note);
     parts.join(", ")
@@ -510,6 +533,25 @@ pub fn process_inbox(data: &mut Data) -> Option<String> {
         }
     }
     (!msgs.is_empty()).then(|| format!("Inbox: {}", msgs.join("; ")))
+}
+
+/// A journal entry from an import: {"text", "date"?, "time"?, "mood"? (1-5)}.
+fn journal_from(v: Value, today: NaiveDate) -> Result<crate::journal::JournalEntry, String> {
+    let Value::Object(o) = v else { return Err("must be an object".into()) };
+    let mut e = crate::journal::JournalEntry::new("");
+    for (k, val) in o {
+        match k.as_str() {
+            "text" => e.text = val.as_str().map(|s| s.trim().to_string()).ok_or("\"text\" must be text")?,
+            "date" => e.date = val.as_str().and_then(|d| parse_date(d, today)).ok_or("\"date\": use YYYY-MM-DD")?,
+            "time" => e.time = val.as_str().and_then(parse_time).ok_or("\"time\": use HH:MM")?,
+            "mood" => e.mood = Some(val.as_u64().filter(|m| (1..=5).contains(m)).ok_or("\"mood\" must be 1 to 5")? as u8),
+            other => return Err(format!("unknown field \"{other}\" (expected text, date, time, mood)")),
+        }
+    }
+    if e.text.is_empty() {
+        return Err("\"text\" is required".into());
+    }
+    Ok(e)
 }
 
 /// A validated change to settings from an import (Claude or pasted JSON).

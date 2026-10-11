@@ -6,6 +6,7 @@ mod charts;
 mod streaks;
 pub mod theme;
 mod dialogs;
+mod journal;
 mod palettes;
 mod settings;
 mod views;
@@ -29,6 +30,7 @@ enum View {
     Calendar,
     Charts,
     Body,
+    Journal,
     Settings,
 }
 
@@ -49,6 +51,8 @@ pub enum Action {
     /// Today's weight in kg; None removes it.
     SetWeight(Option<f32>),
     DeleteCalories(String),
+    Journal(journal::Cmd),
+    OpenJournal,
 }
 
 /// Text fields of the calorie card on the Today view.
@@ -125,6 +129,7 @@ pub struct App {
     claude_session: bool,
     chart_period: charts::Period,
     body_ui: body::BodyUi,
+    journal: journal::JournalUi,
     board: board::BoardState,
     /// Claude's answer waiting for Apply / Discard: (what was asked, import JSON).
     claude_reply: Option<(String, String)>,
@@ -171,6 +176,7 @@ impl App {
             claude_session: start_in_claude,
             chart_period: charts::Period::Month,
             body_ui: body::BodyUi::default(),
+            journal: journal::JournalUi::default(),
             board: board::BoardState::default(),
             claude_reply: None,
             claude_error: None,
@@ -324,7 +330,7 @@ impl App {
     /// Day that quick-add uses when the text has no date.
     fn default_day(&self) -> NaiveDate {
         match self.view {
-            View::Today | View::Charts | View::Body | View::Settings => Local::now().date_naive(),
+            View::Today | View::Charts | View::Body | View::Journal | View::Settings => Local::now().date_naive(),
             View::Calendar => self.selected,
         }
     }
@@ -384,6 +390,7 @@ impl App {
                 }
                 self.body_ui.reset();
             }
+            Command::Journal(text) => journal::save_text(data, text, None),
             Command::Done(q) => match Self::find_task(data, &q) {
                 Some(i) => {
                     let id = data.items[i].id.clone();
@@ -459,6 +466,8 @@ impl App {
                     }
                 }
             }
+            Action::Journal(cmd) => self.journal.apply(cmd, data),
+            Action::OpenJournal => self.view = View::Journal,
             Action::DeleteCalories(id) => {
                 data.calories.retain(|c| c.id != id);
                 data.save_calories();
@@ -651,6 +660,7 @@ impl App {
                     Command::Calories { kcal, what } if what.is_empty() => format!("» log {kcal} kcal"),
                     Command::Calories { kcal, what } => format!("» log {kcal} kcal · {what}"),
                     Command::Weight(kg) => format!("» weight {kg:.1} kg today"),
+                    Command::Journal(text) => format!("» journal entry: {text}"),
                     Command::Goal { kg, by: Some(by) } => format!("» goal {kg:.1} kg by {by}"),
                     Command::Goal { kg, by: None } => format!("» goal {kg:.1} kg (at 0.5 kg/week)"),
                     Command::Done(q) => match Self::find_task(data, &q) {
@@ -774,9 +784,15 @@ impl eframe::App for App {
         let no_dialog = self.editor.is_none() && self.import.is_none();
         // Only when no text box is taking keyboard input (a focused button or tile doesn't count).
         if !typed.is_empty() && no_dialog && !ctx.wants_keyboard_input() {
-            self.quick.push_str(&typed);
-            self.focus_quick = true;
+            // on the Journal page, typing starts an entry instead
+            if self.view == View::Journal {
+                self.journal.type_into(&typed);
+            } else {
+                self.quick.push_str(&typed);
+                self.focus_quick = true;
+            }
         }
+        self.journal.poll(ctx, &mut data);
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
             self.focus_quick = true;
         }
@@ -819,7 +835,7 @@ impl eframe::App for App {
         match self.view {
             View::Today => {
                 egui::SidePanel::right("today_side").resizable(true).default_width(370.0).min_width(300.0).max_width(560.0).show(ctx, |ui| {
-                    views::today_side(ui, &data, &mut self.cal_input, &mut actions);
+                    views::today_side(ui, &data, &mut self.cal_input, &mut self.journal, &mut actions);
                 });
                 egui::CentralPanel::default().show(ctx, |ui| views::today(ui, &data, &mut self.board, &mut actions));
             }
@@ -829,6 +845,7 @@ impl eframe::App for App {
             View::Body => {
                 egui::CentralPanel::default().show(ctx, |ui| body::body(ui, &mut data, &mut self.body_ui));
             }
+            View::Journal => self.journal.page(ctx, &mut data),
             View::Settings => {
                 let page = self.settings.get_or_insert_with(|| settings::SettingsPage::open(&data));
                 egui::SidePanel::left("settings_nav").resizable(false).exact_width(210.0).show(ctx, |ui| page.nav(ui, &data));
@@ -922,7 +939,7 @@ fn logo_mark(ui: &mut egui::Ui) {
 /// The main tabs as a segmented pill control with icons.
 fn tab_bar(ui: &mut egui::Ui, view: &mut View) {
     let t = theme::th();
-    let tabs = [(View::Today, "✔", "Habits"), (View::Calendar, "📅", "Calendar"), (View::Charts, "📈", "Charts"), (View::Body, "⚖", "Body")];
+    let tabs = [(View::Today, "✔", "Habits"), (View::Calendar, "📅", "Calendar"), (View::Charts, "📈", "Charts"), (View::Body, "⚖", "Body"), (View::Journal, "📖", "Journal")];
     let font = egui::FontId::proportional(14.5);
     let (pad_x, h) = (14.0, 30.0);
     let galleys: Vec<_> = tabs

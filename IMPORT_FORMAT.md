@@ -101,6 +101,17 @@ day, and a new value replaces that day's old one.
 `kg` is required (a number, in kilograms). Convert from pounds if needed (1 lb = 0.4536 kg).
 `date` defaults to today.
 
+## Journal
+
+When the user asks you to write something in their journal, add a top-level `"journal"` array:
+
+```json
+{ "morrowkeep_import": 1, "journal": [ { "text": "Long walk by the lake, felt calm. #walk", "mood": 4 } ] }
+```
+
+`text` is required. `date` (`YYYY-MM-DD`, default today), `time` (`HH:MM`, default now) and
+`mood` (1 = rough … 5 = great) are optional. Write it in the user's own words and voice.
+
 ## Changing settings
 
 When the user asks to change how Morrowkeep looks or behaves (colors, categories, reminders,
