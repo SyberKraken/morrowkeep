@@ -561,12 +561,7 @@ impl JournalUi {
         let t = theme::th();
         theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(journal::PROMPTS[self.prompt % journal::PROMPTS.len()]).italics().color(t.text.muted));
-                if ui.small_button("Another prompt").clicked() {
-                    self.prompt = (self.prompt + 1) % journal::PROMPTS.len();
-                }
-            });
+            ui.label(RichText::new(journal::PROMPTS[self.prompt % journal::PROMPTS.len()]).italics().color(t.text.muted));
             let r = ui.add(
                 egui::TextEdit::multiline(&mut self.draft)
                     .desired_rows(4)
@@ -585,6 +580,11 @@ impl JournalUi {
             }
             let ctrl_enter = r.has_focus() && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Enter));
             ui.horizontal(|ui| {
+                // first in the row, so it never moves when the prompt or mood changes
+                if ui.small_button("Another prompt").clicked() {
+                    self.prompt = (self.prompt + 1) % journal::PROMPTS.len();
+                }
+                ui.add_space(10.0);
                 mood_picker(ui, &mut self.mood);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let can_save = !self.draft.trim().is_empty() && self.recording().is_none();
