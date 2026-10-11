@@ -262,6 +262,7 @@ files always list every option. Sections:
 
 ## Shortcuts
 
+- Drag a tab in the top bar to move it (Settings > Appearance > Reset tab order undoes it)
 - `F11`: full screen on/off (Settings > General > Window also has **Always on top**)
 - Just type: goes to the entry bar (`Ctrl+K` also focuses it, `Esc` clears it)
 - `Enter`: add

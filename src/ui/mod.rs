@@ -563,7 +563,11 @@ impl App {
             logo_mark(ui);
             ui.label(RichText::new("Morrowkeep").font(theme::bold(18.0)).color(theme::th().data.brand));
             ui.add_space(14.0);
-            tab_bar(ui, &mut self.view);
+            let order = View::ordered(&data.settings.tab_order);
+            if let Some(new) = tab_bar(ui, &mut self.view, &order) {
+                data.settings.tab_order = new.iter().map(|v| v.key().to_string()).collect();
+                data.save_settings();
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let unsaved = self.settings.as_ref().is_some_and(|s| s.dirty(data));
                 let label = if unsaved { "⚙ Settings •" } else { "⚙ Settings" };
@@ -936,40 +940,119 @@ fn logo_mark(ui: &mut egui::Ui) {
     }
 }
 
-/// The main tabs as a segmented pill control with icons.
-fn tab_bar(ui: &mut egui::Ui, view: &mut View) {
+impl View {
+    /// The main tabs (Settings has its own button), in their default order.
+    const TABS: [View; 5] = [View::Today, View::Calendar, View::Charts, View::Body, View::Journal];
+
+    fn key(self) -> &'static str {
+        match self {
+            View::Today => "habits",
+            View::Calendar => "calendar",
+            View::Charts => "charts",
+            View::Body => "body",
+            View::Journal => "journal",
+            View::Settings => "settings",
+        }
+    }
+
+    fn tab(self) -> (&'static str, &'static str) {
+        match self {
+            View::Today => ("✔", "Habits"),
+            View::Calendar => ("📅", "Calendar"),
+            View::Charts => ("📈", "Charts"),
+            View::Body => ("⚖", "Body"),
+            View::Journal => ("📖", "Journal"),
+            View::Settings => ("⚙", "Settings"),
+        }
+    }
+
+    /// The tabs in the saved order; tabs missing from it (e.g. new ones) go at the end.
+    fn ordered(saved: &[String]) -> Vec<View> {
+        let mut v: Vec<View> = saved.iter().filter_map(|k| View::TABS.iter().copied().find(|t| t.key() == k)).collect();
+        v.dedup();
+        for t in View::TABS {
+            if !v.contains(&t) {
+                v.push(t);
+            }
+        }
+        v
+    }
+}
+
+/// The main tabs as a segmented pill control with icons. Drag a tab sideways to move it;
+/// returns the new order when a drag ends.
+fn tab_bar(ui: &mut egui::Ui, view: &mut View, order: &[View]) -> Option<Vec<View>> {
     let t = theme::th();
-    let tabs = [(View::Today, "✔", "Habits"), (View::Calendar, "📅", "Calendar"), (View::Charts, "📈", "Charts"), (View::Body, "⚖", "Body"), (View::Journal, "📖", "Journal")];
     let font = egui::FontId::proportional(14.5);
     let (pad_x, h) = (14.0, 30.0);
-    let galleys: Vec<_> = tabs
-        .iter()
-        .map(|(_, icon, label)| ui.painter().layout_no_wrap(format!("{icon}  {label}"), font.clone(), t.text.primary))
-        .collect();
-    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 2.0 * pad_x).collect();
+    let label = |v: View| {
+        let (icon, name) = v.tab();
+        format!("{icon}  {name}")
+    };
+    let widths: Vec<f32> = order.iter().map(|v| ui.painter().layout_no_wrap(label(*v), font.clone(), t.text.primary).size().x + 2.0 * pad_x).collect();
     let total = egui::vec2(widths.iter().sum::<f32>() + 6.0, h);
     let (outer, _) = ui.allocate_exact_size(total, egui::Sense::hover());
     let radius = egui::CornerRadius::same((h / 2.0) as u8);
+    let pill = egui::CornerRadius::same(((h - 6.0) / 2.0) as u8);
     ui.painter().rect_filled(outer, radius, t.surface.card);
     ui.painter().rect_stroke(outer, radius, egui::Stroke::new(1.0, t.surface.card_border), egui::StrokeKind::Inside);
+    let mut rects = Vec::new();
     let mut x = outer.left() + 3.0;
-    for (k, (tab, icon, label)) in tabs.iter().enumerate() {
-        let r = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), egui::vec2(widths[k], h - 6.0));
-        x += widths[k];
-        let resp = ui.interact(r, Id::new(("tab", k)), egui::Sense::click());
+    for w in &widths {
+        rects.push(egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), egui::vec2(*w, h - 6.0)));
+        x += w;
+    }
+    let mut dragging: Option<(usize, f32)> = None;
+    let mut dropped: Option<(usize, f32)> = None;
+    for (k, tab) in order.iter().enumerate() {
+        let r = rects[k];
+        let resp = ui.interact(r, Id::new(("tab", tab.key())), egui::Sense::click_and_drag());
+        if resp.dragged() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                dragging = Some((k, p.x));
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
+        }
+        if resp.drag_stopped() {
+            if let Some(p) = ui.ctx().pointer_latest_pos() {
+                dropped = Some((k, p.x));
+            }
+        }
         let selected = *view == *tab;
+        let being_dragged = dragging.is_some_and(|(d, _)| d == k);
         if selected {
-            ui.painter().rect_filled(r, egui::CornerRadius::same(((h - 6.0) / 2.0) as u8), t.widget.selection);
-        } else if resp.hovered() {
-            ui.painter().rect_filled(r, egui::CornerRadius::same(((h - 6.0) / 2.0) as u8), t.widget.fill_hover);
+            ui.painter().rect_filled(r, pill, t.widget.selection.linear_multiply(if being_dragged { 0.4 } else { 1.0 }));
+        } else if resp.hovered() || being_dragged {
+            ui.painter().rect_filled(r, pill, t.widget.fill_hover);
         }
         let ink = if selected || resp.hovered() { t.text.primary } else { t.text.muted };
-        let g = ui.painter().layout_no_wrap(format!("{icon}  {label}"), font.clone(), ink);
+        let g = ui.painter().layout_no_wrap(label(*tab), font.clone(), ink);
         ui.painter().galley(r.center() - g.size() / 2.0, g, ink);
         if resp.clicked() {
             *view = *tab;
         }
     }
+    // where a dragged tab would land: before the first tab whose middle is right of the pointer
+    let slot = |px: f32| rects.iter().position(|r| px < r.center().x).unwrap_or(rects.len());
+    if let Some((from, px)) = dragging {
+        let to = slot(px);
+        if to != from && to != from + 1 {
+            let line_x = if to < rects.len() { rects[to].left() } else { rects[rects.len() - 1].right() };
+            ui.painter().line_segment([egui::pos2(line_x, outer.top() + 4.0), egui::pos2(line_x, outer.bottom() - 4.0)], egui::Stroke::new(2.5, t.widget.selection_border));
+        }
+    }
+    let (from, px) = dropped?;
+    let mut to = slot(px);
+    if to == from || to == from + 1 {
+        return None;
+    }
+    let mut v = order.to_vec();
+    let moved = v.remove(from);
+    if to > from {
+        to -= 1;
+    }
+    v.insert(to, moved);
+    Some(v)
 }
 
 fn setup_style(ctx: &egui::Context, font: &str) {

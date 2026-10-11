@@ -327,6 +327,14 @@ impl SettingsPage {
         });
         note(ui, "Themes are JSON files in the themes folder. Copy one, change its colors, and pick it here. Edits to the active theme apply live as you save the file.");
 
+        subheading(ui, "Tabs");
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Drag a tab in the top bar to move it.").weak().size(12.5));
+            if ui.add_enabled(!self.draft.tab_order.is_empty(), egui::Button::new("Reset tab order")).clicked() {
+                self.draft.tab_order.clear();
+            }
+        });
+
         subheading(ui, "Font");
         let current = super::theme::FONTS.iter().find(|(v, _)| *v == self.draft.font).map_or(self.draft.font.as_str(), |(_, l)| *l);
         egui::ComboBox::from_id_salt("font").selected_text(current).width(260.0).show_ui(ui, |ui| {
