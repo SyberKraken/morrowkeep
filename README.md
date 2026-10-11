@@ -79,6 +79,21 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
     Settings > Reminders.
   - Morrowkeep keeps its Start menu shortcut tagged with its notification ID. Windows needs that to
     show the notifications in the notification panel.
+- **Foods tab: your food library.** Save ingredients with kcal per 100 g, a default serving
+  ("1 jar = 250 g") and optional protein, carbs and fat, plus aliases ("quark" for kvarg).
+  Build **meals** from them: ingredient weights, how many servings it makes, and optionally the
+  cooked weight, so "300 g chili" is exact. Per-serving and per-100 g numbers update as you edit.
+  **✨ Estimate with Claude** fills in a new ingredient from its name. Then log by amount anywhere:
+  - on the food's page (servings or grams);
+  - in the entry bar: `1 serving of kvarg`, `2 jars of kvarg`, `200 g chili`, `had half a portion
+    of chili`, `kvarg x2`;
+  - in Claude mode ("add 1 serving of kvarg to my calorie count"): Claude refers to the
+    library and Morrowkeep computes the calories, or saves new foods for you;
+  - with the **Foods** picker on the Habits calorie card (favorites and recent foods, one click
+    per serving).
+
+  Entries from the library keep their grams and macros, and the calorie card shows today's
+  protein, carbs and fat.
 - **Journal tab.** Write entries or record voice notes:
   - **Voice entries:** the recording is kept as a WAV file (`journal-audio\`). Whisper transcribes
     it on this PC in the background, and the transcript shows under it, editable. **▶ Play** opens
@@ -141,11 +156,12 @@ LLVM (see the comment in `Cargo.toml`).
 | `calories.json` | Calorie log, one entry per food or drink. Daily totals are summed from it. |
 | `weight.json` | Weight log, one entry per day. |
 | `journal.json` | Journal entries (text, mood, transcripts). |
+| `foods.json` | Food library: ingredients and meals. |
 | `journal-audio/` | Journal voice recordings (WAV). |
 | `settings.json` | Settings, including your categories and color choices. Editable on the Settings tab. |
 | `body.json` | Body profile, goal weight (with earlier goals) and the fallback calorie limit. Editable on the Body tab. |
 | `inbox/` | Drop import `.json` files here. They are moved to `imported/`, or to `failed/` with an `.errors.txt`. |
-| `backups/` | Daily copies of `items.json`, `calories.json`, `weight.json` and `journal.json`, keeping 14 days of each. |
+| `backups/` | Daily copies of `items.json`, `calories.json`, `weight.json`, `journal.json` and `foods.json`, keeping 14 days of each. |
 | `models/` | Whisper voice models. |
 | `google_token.json` | Google sign-in token. Delete it to disconnect. |
 | `google_events_cache.json`, `sync_state.json` | Sync bookkeeping. |
@@ -198,6 +214,7 @@ understands:
 | `450 kcal pasta`, `+450`, `kcal 300 snack` | logs calories |
 | `82.4 kg`, `weight 82,4`, `weighed 82.4` | logs today's weight |
 | `journal: long walk, felt good`, `dear diary …` | adds a journal entry |
+| `1 serving of kvarg`, `200 g chili`, `had 2 jars of kvarg` | logs a food from your library (exact kcal) |
 | `goal 76 kg by feb 1`, `target weight 75.5` | sets your goal weight (without a date: 0.5 kg a week) |
 | `done vacuum`, `did push-ups` | ticks off the matching task for today |
 | `ate a chicken burrito`, `I had a banana` | estimates the calories with Claude, then shows them for review |

@@ -17,6 +17,7 @@ pub struct Paths {
     pub calories: PathBuf,
     pub weight: PathBuf,
     pub journal: PathBuf,
+    pub foods: PathBuf,
     /// Journal voice recordings (WAV).
     pub journal_audio: PathBuf,
     pub settings: PathBuf,
@@ -42,6 +43,7 @@ impl Paths {
             calories: root.join("calories.json"),
             weight: root.join("weight.json"),
             journal: root.join("journal.json"),
+            foods: root.join("foods.json"),
             journal_audio: root.join("journal-audio"),
             settings: root.join("settings.json"),
             body: root.join("body.json"),
@@ -197,6 +199,8 @@ pub struct Data {
     pub calories: Vec<CalorieEntry>,
     /// Sorted by date, at most one per day.
     pub weights: Vec<WeightEntry>,
+    /// Food library: ingredients and meals.
+    pub foods: crate::foods::Library,
     /// Journal entries, sorted by date and time.
     pub journal: Vec<crate::journal::JournalEntry>,
     pub settings: Settings,
@@ -216,6 +220,7 @@ pub struct Data {
     calories_mtime: Option<SystemTime>,
     weight_mtime: Option<SystemTime>,
     journal_mtime: Option<SystemTime>,
+    foods_mtime: Option<SystemTime>,
 }
 
 impl Data {
@@ -256,6 +261,7 @@ impl Data {
             calories: Vec::new(),
             weights: Vec::new(),
             journal: Vec::new(),
+            foods: Default::default(),
             settings,
             body,
             body_error,
@@ -268,6 +274,7 @@ impl Data {
             calories_mtime: None,
             weight_mtime: None,
             journal_mtime: None,
+            foods_mtime: None,
         };
         if !data.paths.settings.exists() {
             data.save_settings();
@@ -286,7 +293,12 @@ impl Data {
         self.calories_mtime = mtime(&self.paths.calories);
         self.weight_mtime = mtime(&self.paths.weight);
         self.journal_mtime = mtime(&self.paths.journal);
+        self.foods_mtime = mtime(&self.paths.foods);
         let mut errors = Vec::new();
+        match read_json::<crate::foods::Library>(&self.paths.foods) {
+            Ok(f) => self.foods = f.unwrap_or_default(),
+            Err(e) => errors.push(format!("foods.json could not be read: {e}")),
+        }
         match read_json::<JournalFile>(&self.paths.journal) {
             Ok(f) => {
                 self.journal = f.map(|f| f.entries).unwrap_or_default();
@@ -327,6 +339,7 @@ impl Data {
             || changed(&self.paths.calories, self.calories_mtime)
             || changed(&self.paths.weight, self.weight_mtime)
             || changed(&self.paths.journal, self.journal_mtime)
+            || changed(&self.paths.foods, self.foods_mtime)
     }
 
     pub fn save_journal(&mut self) {
@@ -339,6 +352,39 @@ impl Data {
             Ok(()) => self.journal_mtime = mtime(&self.paths.journal),
             Err(e) => self.status = format!("Saving the journal failed: {e}"),
         }
+    }
+
+    pub fn save_foods(&mut self) {
+        if self.load_error.is_some() {
+            return;
+        }
+        self.foods.version = 1;
+        match write_json(&self.paths.foods, &self.foods) {
+            Ok(()) => self.foods_mtime = mtime(&self.paths.foods),
+            Err(e) => self.status = format!("Saving foods failed: {e}"),
+        }
+    }
+
+    /// A calorie entry for an amount of a library food or meal (not yet added).
+    pub fn food_entry(p: &crate::foods::Portionable, amount: crate::foods::Amount, date: chrono::NaiveDate, source: &str) -> CalorieEntry {
+        let n = p.nutrition(amount);
+        let mut e = CalorieEntry::new(date, p.kcal(amount), format!("{} · {}", p.name, p.describe(amount)), source);
+        e.food = Some(p.name.clone());
+        e.grams = Some((p.grams(amount) * 10.0).round() / 10.0);
+        let r = |v: Option<f32>| v.map(|g| (g * 10.0).round() / 10.0);
+        (e.protein, e.carbs, e.fat) = (r(n.protein), r(n.carbs), r(n.fat));
+        e
+    }
+
+    /// Logs an amount of a library food for today; returns the status message.
+    pub fn log_food(&mut self, p: &crate::foods::Portionable, amount: crate::foods::Amount) -> String {
+        let today = Local::now().date_naive();
+        let e = Self::food_entry(p, amount, today, "library");
+        let msg = format!("+{} kcal · {} · {} kcal today", e.kcal, e.description, self.calories_on(today) + e.kcal);
+        self.calories.push(e);
+        self.save_calories();
+        self.status = msg.clone();
+        msg
     }
 
     pub fn journal_on(&self, day: chrono::NaiveDate) -> usize {
@@ -548,7 +594,7 @@ impl Data {
     /// Copies items.json, calories.json and weight.json to backups/<name>-YYYY-MM-DD.json once a day,
     /// keeping two weeks of each.
     fn daily_backup(&self) {
-        for (prefix, file) in [("items", &self.paths.items), ("calories", &self.paths.calories), ("weight", &self.paths.weight), ("journal", &self.paths.journal)] {
+        for (prefix, file) in [("items", &self.paths.items), ("calories", &self.paths.calories), ("weight", &self.paths.weight), ("journal", &self.paths.journal), ("foods", &self.paths.foods)] {
             if !file.exists() {
                 continue;
             }

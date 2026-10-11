@@ -6,6 +6,7 @@ mod charts;
 mod streaks;
 pub mod theme;
 mod dialogs;
+mod foods;
 mod journal;
 mod palettes;
 mod settings;
@@ -30,6 +31,7 @@ enum View {
     Calendar,
     Charts,
     Body,
+    Foods,
     Journal,
     Settings,
 }
@@ -53,6 +55,8 @@ pub enum Action {
     DeleteCalories(String),
     Journal(journal::Cmd),
     OpenJournal,
+    /// Log an amount of a library food or meal (by id).
+    LogFood(String, crate::foods::Amount),
 }
 
 /// Text fields of the calorie card on the Today view.
@@ -61,6 +65,8 @@ pub struct CalorieInput {
     pub kcal: String,
     pub what: String,
     pub weight: String,
+    /// "From your foods" search on the calorie card.
+    pub food: String,
 }
 
 /// A category's color: yours from Settings, else the theme's.
@@ -130,6 +136,7 @@ pub struct App {
     chart_period: charts::Period,
     body_ui: body::BodyUi,
     journal: journal::JournalUi,
+    foods_ui: foods::FoodsUi,
     board: board::BoardState,
     /// Claude's answer waiting for Apply / Discard: (what was asked, import JSON).
     claude_reply: Option<(String, String)>,
@@ -177,6 +184,7 @@ impl App {
             chart_period: charts::Period::Month,
             body_ui: body::BodyUi::default(),
             journal: journal::JournalUi::default(),
+            foods_ui: foods::FoodsUi::default(),
             board: board::BoardState::default(),
             claude_reply: None,
             claude_error: None,
@@ -266,7 +274,7 @@ impl App {
             }
         }
         let Some((request, text)) = &self.claude_reply else { return };
-        let plan = import::plan(text, &data.items, &data.calories, &data.settings, Local::now().date_naive());
+        let plan = import::plan(text, &data.items, &data.calories, &data.settings, &data.foods, Local::now().date_naive());
         let mut close = false;
         let mut discard = false;
         let mut edit = None;
@@ -330,7 +338,7 @@ impl App {
     /// Day that quick-add uses when the text has no date.
     fn default_day(&self) -> NaiveDate {
         match self.view {
-            View::Today | View::Charts | View::Body | View::Journal | View::Settings => Local::now().date_naive(),
+            View::Today | View::Charts | View::Body | View::Foods | View::Journal | View::Settings => Local::now().date_naive(),
             View::Calendar => self.selected,
         }
     }
@@ -364,6 +372,12 @@ impl App {
     /// Calories, weight, "done …" and food entries typed into the bar (Local mode).
     /// Returns true if the text was one of those rather than a task.
     fn run_command(&mut self, data: &mut Data, ctx: &egui::Context, text: &str) -> bool {
+        // "1 serving of kvarg", "200 g chili": foods from the library are logged exactly
+        if let Some((p, amount)) = crate::foods::parse_log(text, &data.foods) {
+            data.log_food(&p, amount);
+            self.quick.clear();
+            return true;
+        }
         let Some(cmd) = parse_command(text) else { return false };
         let today = Local::now().date_naive();
         match cmd {
@@ -468,6 +482,11 @@ impl App {
             }
             Action::Journal(cmd) => self.journal.apply(cmd, data),
             Action::OpenJournal => self.view = View::Journal,
+            Action::LogFood(id, amount) => {
+                if let Some(p) = data.foods.by_id(&id) {
+                    data.log_food(&p, amount);
+                }
+            }
             Action::DeleteCalories(id) => {
                 data.calories.retain(|c| c.id != id);
                 data.save_calories();
@@ -659,7 +678,10 @@ impl App {
         self.claude_panel(ui, data);
         // live preview of how the text was understood
         if !self.claude_mode() && !self.quick.trim().is_empty() {
-            if let Some(cmd) = parse_command(&self.quick) {
+            if let Some((p, amount)) = crate::foods::parse_log(&self.quick, &data.foods) {
+                ui.label(RichText::new(format!("» log {} · {} = {} kcal (from your foods)", p.name, p.describe(amount), p.kcal(amount))).weak().italics());
+                return;
+            } else if let Some(cmd) = parse_command(&self.quick) {
                 let text = match cmd {
                     Command::Calories { kcal, what } if what.is_empty() => format!("» log {kcal} kcal"),
                     Command::Calories { kcal, what } => format!("» log {kcal} kcal · {what}"),
@@ -797,6 +819,7 @@ impl eframe::App for App {
             }
         }
         self.journal.poll(ctx, &mut data);
+        self.foods_ui.poll(&mut data);
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
             self.focus_quick = true;
         }
@@ -850,6 +873,7 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| body::body(ui, &mut data, &mut self.body_ui));
             }
             View::Journal => self.journal.page(ctx, &mut data),
+            View::Foods => self.foods_ui.page(ctx, &mut data),
             View::Settings => {
                 let page = self.settings.get_or_insert_with(|| settings::SettingsPage::open(&data));
                 egui::SidePanel::left("settings_nav").resizable(false).exact_width(210.0).show(ctx, |ui| page.nav(ui, &data));
@@ -942,7 +966,7 @@ fn logo_mark(ui: &mut egui::Ui) {
 
 impl View {
     /// The main tabs (Settings has its own button), in their default order.
-    const TABS: [View; 5] = [View::Today, View::Calendar, View::Charts, View::Body, View::Journal];
+    const TABS: [View; 6] = [View::Today, View::Calendar, View::Charts, View::Body, View::Foods, View::Journal];
 
     fn key(self) -> &'static str {
         match self {
@@ -950,6 +974,7 @@ impl View {
             View::Calendar => "calendar",
             View::Charts => "charts",
             View::Body => "body",
+            View::Foods => "foods",
             View::Journal => "journal",
             View::Settings => "settings",
         }
@@ -961,6 +986,7 @@ impl View {
             View::Calendar => ("📅", "Calendar"),
             View::Charts => ("📈", "Charts"),
             View::Body => ("⚖", "Body"),
+            View::Foods => ("🍴", "Foods"),
             View::Journal => ("📖", "Journal"),
             View::Settings => ("⚙", "Settings"),
         }

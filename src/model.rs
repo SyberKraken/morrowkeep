@@ -367,9 +367,21 @@ pub struct CalorieEntry {
     /// What was eaten, ideally with the per-component estimate.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    /// "manual", "claude" or "import".
+    /// "manual", "claude", "import" or "library".
     #[serde(default = "manual")]
     pub source: String,
+    /// Logged from the food library: the food's name and the grams eaten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub food: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grams: Option<f32>,
+    /// Macros in grams, when known (library foods with macros).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protein: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carbs: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fat: Option<f32>,
 }
 
 fn manual() -> String {
@@ -389,6 +401,11 @@ impl CalorieEntry {
             kcal,
             description: description.into(),
             source: source.into(),
+            food: None,
+            grams: None,
+            protein: None,
+            carbs: None,
+            fat: None,
         }
     }
 }

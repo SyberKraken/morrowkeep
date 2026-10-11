@@ -4,6 +4,7 @@
 mod body;
 mod categories;
 mod claude;
+mod foods;
 mod gcal;
 mod journal;
 mod import;

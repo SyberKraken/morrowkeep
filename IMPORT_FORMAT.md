@@ -89,6 +89,38 @@ When the user tells you what they ate or drank, add entries to a top-level `"cal
 - Use `"message"` to mention a big assumption (e.g. the portion size you assumed).
 - To fix a wrong entry, delete it by its id (from today's calorie log in the context) and add a corrected one.
 
+### Foods from the user's library
+
+If the context lists a **food library** and the user names one of those foods ("1 serving of
+kvarg", "200 g chili", "two jars of quark"), don't estimate: log it by name and amount and
+Morrowkeep computes the calories from its saved values:
+
+```json
+{ "morrowkeep_import": 1, "calories": [ { "food": "Kvarg", "servings": 1 }, { "food": "Chili", "grams": 300 } ] }
+```
+
+| field | meaning |
+|---|---|
+| `food` | Name (or alias) of a food or meal in the library. |
+| `servings` | Number of servings (default 1). "a jar" when the serving is a jar = 1. |
+| `grams` | Instead of `servings`, an amount in grams. |
+
+`date` and `time` work as above. For anything not in the library, estimate as usual with
+`kcal` and `description`.
+
+### Saving foods to the library
+
+When the user asks to save a food ("save kvarg: 62 kcal per 100 g, a jar is 250 g"), add a
+top-level `"foods"` array. A food with the same name is updated (fields you leave out keep
+their values).
+
+```json
+{ "morrowkeep_import": 1, "foods": [ { "name": "Kvarg", "kcal_per_100g": 62, "serving_g": 250, "serving_name": "jar", "protein_per_100g": 11, "carbs_per_100g": 4, "fat_per_100g": 0.2, "aliases": ["quark"] } ] }
+```
+
+`name` is required, and `kcal_per_100g` too for a new food. Use the numbers the user gives;
+only estimate (on the high side) if they ask you to.
+
 ## Logging weight
 
 When the user tells you their weight, add a top-level `"weight"` array. There's one value per

@@ -321,6 +321,7 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mu
                     ui.add(egui::TextEdit::singleline(&mut input.what).desired_width(ui.available_width()).hint_text("what was it? (optional)"));
                 });
             });
+            super::foods::FoodsUi::picker(ui, data, &mut input.food, actions);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Quick:").weak());
                 for n in [100, 250, 500] {
@@ -330,6 +331,18 @@ fn calorie_card(ui: &mut Ui, data: &Data, input: &mut CalorieInput, actions: &mu
                     }
                 }
             });
+            // macros, when today's entries have them (library foods)
+            let todays: Vec<&crate::model::CalorieEntry> = data.calories.iter().filter(|c| c.date == today).collect();
+            let sum = |f: fn(&crate::model::CalorieEntry) -> Option<f32>| {
+                let v: Vec<f32> = todays.iter().filter_map(|c| f(c)).collect();
+                (!v.is_empty()).then(|| v.iter().sum::<f32>())
+            };
+            let (p, c, f) = (sum(|e| e.protein), sum(|e| e.carbs), sum(|e| e.fat));
+            if p.is_some() || c.is_some() || f.is_some() {
+                let parts: Vec<String> = [("protein", p), ("carbs", c), ("fat", f)].iter().filter_map(|(l, v)| v.map(|g| format!("{l} {g:.0} g"))).collect();
+                ui.label(RichText::new(parts.join(" · ")).size(12.5).color(super::theme::th().text.muted))
+                    .on_hover_text("From foods in your library that have macros. Other entries aren't included.");
+            }
             if data.calories.iter().any(|c| c.date == today) {
                 ui.add_space(6.0);
                 calorie_list(ui, data, today, actions);

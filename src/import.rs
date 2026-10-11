@@ -1,6 +1,7 @@
 //! Importing items from JSON (pasted, or dropped into the inbox folder). See IMPORT_FORMAT.md.
 
 use crate::categories::{self, Category, StreakStyle};
+use crate::foods::{Amount, Food, Library};
 use crate::model::{CalorieEntry, Item, Repeat, WeightEntry};
 use crate::parse::{parse_date, parse_duration, parse_time};
 use crate::store::{Data, Settings, IMPORT_FORMAT};
@@ -18,6 +19,8 @@ pub enum Op {
     DeleteCalories { id: String, label: String },
     Settings(Box<SettingsChange>),
     Journal(crate::journal::JournalEntry),
+    /// Add a food to the library, or replace the one with the same name.
+    SaveFood(Food),
 }
 
 impl Op {
@@ -49,6 +52,7 @@ impl Op {
             Op::DeleteCalories { label, .. } => format!("- remove calories {label}"),
             Op::LogWeight(w) => format!("+ weight {:.1} kg · {}", w.kg, w.date.format("%a %b %-d")),
             Op::Settings(s) => s.lines.join("\n"),
+            Op::SaveFood(f) => format!("+ food {} · {:.0} kcal/100 g · 1 {} = {:.0} g", f.name, f.kcal_per_100g, f.serving_name, f.serving_g),
             Op::Journal(e) => format!("+ journal {} {} · {}", e.date.format("%a %b %-d"), e.time.format("%H:%M"), e.text),
         }
     }
@@ -101,7 +105,7 @@ fn escape_raw_controls(json: &str) -> String {
     out
 }
 
-pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: &Settings, today: NaiveDate) -> Plan {
+pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: &Settings, foods: &Library, today: NaiveDate) -> Plan {
     let mut plan = Plan::default();
     let json = extract_json(text);
     let parsed = serde_json::from_str(json).or_else(|e| serde_json::from_str(&escape_raw_controls(json)).map_err(|_| e));
@@ -143,6 +147,18 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
                 None => {}
                 Some(_) => plan.errors.push("\"calories\" must be an array".into()),
             }
+            match o.remove("foods") {
+                Some(Value::Array(a)) => {
+                    for (n, v) in a.into_iter().enumerate() {
+                        match food_from(v, foods) {
+                            Ok(f) => plan.ops.push(Op::SaveFood(f)),
+                            Err(e) => plan.errors.push(format!("foods {}: {e}", n + 1)),
+                        }
+                    }
+                }
+                None => {}
+                Some(_) => plan.errors.push("\"foods\" must be an array".into()),
+            }
             match o.remove("journal") {
                 Some(Value::Array(a)) => {
                     for (n, v) in a.into_iter().enumerate() {
@@ -167,7 +183,7 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
                 plan.message = Some(m);
             }
             for k in o.keys() {
-                plan.errors.push(format!("unknown top-level field \"{k}\" (expected \"items\", \"calories\", \"weight\", \"journal\", \"settings\", \"delete\", \"message\")"));
+                plan.errors.push(format!("unknown top-level field \"{k}\" (expected \"items\", \"calories\", \"weight\", \"foods\", \"journal\", \"settings\", \"delete\", \"message\")"));
             }
             (items, deletes)
         }
@@ -194,7 +210,7 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
             plan.errors.push(format!("{label}: must be an object"));
             continue;
         };
-        match calories_from(obj, today) {
+        match calories_from(obj, today, foods) {
             Ok(c) => plan.ops.push(Op::LogCalories(c)),
             Err(errs) => plan.errors.extend(errs.into_iter().map(|e| format!("{label}: {e}"))),
         }
@@ -237,9 +253,11 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
     plan
 }
 
-fn calories_from(o: Map<String, Value>, today: NaiveDate) -> Result<CalorieEntry, Vec<String>> {
+fn calories_from(o: Map<String, Value>, today: NaiveDate, foods: &Library) -> Result<CalorieEntry, Vec<String>> {
     let mut errs = Vec::new();
     let mut kcal = None;
+    let mut food: Option<String> = None;
+    let mut amount = None;
     let mut date = today;
     let mut time = None;
     let mut description = String::new();
@@ -259,11 +277,42 @@ fn calories_from(o: Map<String, Value>, today: NaiveDate) -> Result<CalorieEntry
                 None if val.is_null() => {}
                 None => errs.push("\"time\": use HH:MM".into()),
             },
-            "description" | "food" | "notes" => match s {
+            "food" => match s {
+                Some(f) => food = Some(f.to_string()),
+                None => errs.push("\"food\" must be text".into()),
+            },
+            "servings" => match val.as_f64().filter(|n| *n > 0.0 && *n <= 50.0) {
+                Some(n) => amount = Some(Amount::Servings(n as f32)),
+                None => errs.push("\"servings\" must be a number above 0".into()),
+            },
+            "grams" => match val.as_f64().filter(|n| *n > 0.0 && *n <= 10000.0) {
+                Some(n) => amount = Some(Amount::Grams(n as f32)),
+                None => errs.push("\"grams\" must be a number above 0".into()),
+            },
+            "description" | "notes" => match s {
                 Some(d) => description = d.to_string(),
                 None => errs.push("\"description\" must be text".into()),
             },
             other => errs.push(format!("unknown field \"{other}\"")),
+        }
+    }
+    // a food from the library: Morrowkeep computes the calories itself
+    if let Some(name) = &food {
+        match foods.find(name) {
+            Some(p) if errs.is_empty() => {
+                let mut e = Data::food_entry(&p, amount.unwrap_or(Amount::Servings(1.0)), date, "claude");
+                if time.is_some() {
+                    e.time = time;
+                }
+                return Ok(e);
+            }
+            Some(_) => return Err(errs),
+            None if kcal.is_none() => errs.push(format!("\"{name}\" isn't in the food library; give \"kcal\" (and a \"description\") instead")),
+            None => {
+                if description.is_empty() {
+                    description = name.clone();
+                }
+            }
         }
     }
     let Some(kcal) = kcal else {
@@ -429,6 +478,7 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
     let mut weights = 0;
     let mut settings_note = None;
     let mut journals = 0;
+    let mut foods_saved = 0;
     for op in ops {
         match op {
             Op::Add(item) => {
@@ -458,6 +508,18 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
             Op::LogWeight(w) => {
                 data.set_weight(w.date, Some(w.kg));
                 weights += 1;
+            }
+            Op::SaveFood(f) => {
+                let key = crate::foods::norm(&f.name);
+                match data.foods.foods.iter_mut().find(|x| crate::foods::norm(&x.name) == key) {
+                    Some(existing) => {
+                        let id = existing.id.clone();
+                        *existing = Food { id, ..f };
+                    }
+                    None => data.foods.foods.push(f),
+                }
+                data.save_foods();
+                foods_saved += 1;
             }
             Op::Journal(e) => {
                 data.journal.push(e);
@@ -496,6 +558,9 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
     if weights > 0 {
         parts.push(format!("{weights} weight entr{}", if weights == 1 { "y" } else { "ies" }));
     }
+    if foods_saved > 0 {
+        parts.push(format!("{foods_saved} food{} saved", if foods_saved == 1 { "" } else { "s" }));
+    }
     if journals > 0 {
         parts.push(format!("{journals} journal entr{}", if journals == 1 { "y" } else { "ies" }));
     }
@@ -520,7 +585,7 @@ pub fn process_inbox(data: &mut Data) -> Option<String> {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let stamp = Local::now().format("%Y%m%d-%H%M%S");
         let today = Local::now().date_naive();
-        let p = plan(&text, &data.items, &data.calories, &data.settings, today);
+        let p = plan(&text, &data.items, &data.calories, &data.settings, &data.foods, today);
         if p.errors.is_empty() {
             let summary = apply(data, p.ops);
             let _ = fs::rename(&path, data.paths.inbox.join("imported").join(format!("{stamp}-{name}")));
@@ -533,6 +598,51 @@ pub fn process_inbox(data: &mut Data) -> Option<String> {
         }
     }
     (!msgs.is_empty()).then(|| format!("Inbox: {}", msgs.join("; ")))
+}
+
+/// A food for the library: {"name", "kcal_per_100g", "serving_g"?, "serving_name"?,
+/// "protein_per_100g"?, "carbs_per_100g"?, "fat_per_100g"?, "aliases"?}.
+fn food_from(v: Value, foods: &Library) -> Result<Food, String> {
+    let Value::Object(o) = v else { return Err("must be an object".into()) };
+    let name = o.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or("\"name\" is required")?;
+    // start from the existing one, so a partial update keeps the rest
+    let mut f = foods
+        .foods
+        .iter()
+        .find(|x| crate::foods::norm(&x.name) == crate::foods::norm(name))
+        .cloned()
+        .unwrap_or(Food { id: uuid::Uuid::new_v4().to_string(), name: name.to_string(), serving_g: 100.0, serving_name: "serving".into(), ..Default::default() });
+    let num = |k: &str, max: f64| -> Result<Option<f32>, String> {
+        match o.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_f64().filter(|n| *n >= 0.0 && *n <= max).map(|n| Some(n as f32)).ok_or(format!("\"{k}\" must be a number from 0 to {max}")),
+        }
+    };
+    for k in o.keys() {
+        if !["name", "kcal_per_100g", "serving_g", "serving_name", "protein_per_100g", "carbs_per_100g", "fat_per_100g", "aliases"].contains(&k.as_str()) {
+            return Err(format!("unknown field \"{k}\""));
+        }
+    }
+    match num("kcal_per_100g", 900.0)? {
+        Some(k) => f.kcal_per_100g = k,
+        None if f.kcal_per_100g <= 0.0 => return Err("\"kcal_per_100g\" is required for a new food".into()),
+        None => {}
+    }
+    if let Some(g) = num("serving_g", 5000.0)?.filter(|g| *g >= 1.0) {
+        f.serving_g = g;
+    }
+    if let Some(n) = o.get("serving_name").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+        f.serving_name = n.to_lowercase();
+    }
+    for (k, slot) in [("protein_per_100g", &mut f.protein_per_100g), ("carbs_per_100g", &mut f.carbs_per_100g), ("fat_per_100g", &mut f.fat_per_100g)] {
+        if o.contains_key(k) {
+            *slot = num(k, 100.0)?;
+        }
+    }
+    if let Some(Value::Array(a)) = o.get("aliases") {
+        f.aliases = a.iter().filter_map(Value::as_str).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    }
+    Ok(f)
 }
 
 /// A journal entry from an import: {"text", "date"?, "time"?, "mood"? (1-5)}.
@@ -868,6 +978,22 @@ pub fn ai_context(data: &Data, days_ahead: i64) -> String {
                 k => t += &format!(" Daily calorie limit: {k} kcal."),
             }
             t += &format!("\n\nCategories (use these as \"kind\"): {}.", crate::categories::names().join(", "));
+            if !data.foods.foods.is_empty() || !data.foods.meals.is_empty() {
+                let lines: Vec<String> = data
+                    .foods
+                    .all()
+                    .iter()
+                    .take(300)
+                    .map(|p| {
+                        let kind = if p.is_meal { " (meal)" } else { "" };
+                        format!("- {}{kind}: {:.0} kcal/100 g, 1 {} = {:.0} g = {} kcal", p.name, p.per100.kcal, p.serving_name, p.serving_g, p.kcal(Amount::Servings(1.0)))
+                    })
+                    .collect();
+                t += &format!(
+                    "\n\nMy food library (log these with \"food\" + \"servings\" or \"grams\", and Morrowkeep computes the calories):\n{}",
+                    lines.join("\n")
+                );
+            }
             t += &format!(
                 "\n\nCurrent settings (change them with a top-level \"settings\" object, see above):\n\n```json\n{}\n```",
                 serde_json::to_string_pretty(&settings_context(data)).unwrap_or_default()
@@ -895,7 +1021,7 @@ mod tests {
             {"id":"abc","notes":"changed"}
         ],"delete":[]}
         ```"#;
-        let p = plan(text, &[existing.clone()], &[], &Settings::default(), today);
+        let p = plan(text, &[existing.clone()], &[], &Settings::default(), &Library::default(), today);
         assert!(p.errors.is_empty(), "{:?}", p.errors);
         assert_eq!(p.ops.len(), 2);
         match &p.ops[0] {
@@ -909,10 +1035,10 @@ mod tests {
             Op::Update(i) => assert_eq!((i.title.as_str(), i.notes.as_str()), ("Old", "changed")),
             _ => panic!(),
         }
-        let raw_newline = plan("{\"items\":[{\"title\":\"Bowl\",\"notes\":\"line 1\nline 2\"}],\"message\":\"hi\"}", &[], &[], &Settings::default(), today);
+        let raw_newline = plan("{\"items\":[{\"title\":\"Bowl\",\"notes\":\"line 1\nline 2\"}],\"message\":\"hi\"}", &[], &[], &Settings::default(), &Library::default(), today);
         assert!(raw_newline.errors.is_empty(), "{:?}", raw_newline.errors);
         assert_eq!(raw_newline.message.as_deref(), Some("hi"));
-        let bad = plan(r#"[{"title":"x","date":"someday","colour":"red"}]"#, &[], &[], &Settings::default(), today);
+        let bad = plan(r#"[{"title":"x","date":"someday","colour":"red"}]"#, &[], &[], &Settings::default(), &Library::default(), today);
         assert_eq!(bad.errors.len(), 2, "{:?}", bad.errors);
 
         let cal = plan(
@@ -920,10 +1046,11 @@ mod tests {
             &[],
             &[],
             &Settings::default(),
+            &Library::default(),
             today,
         );
         assert_eq!(cal.errors.len(), 1, "{:?}", cal.errors); // kcal 0 is rejected
-        let ok = plan(r#"{"calories":[{"kcal":652.4,"description":"eggs","date":"2026-10-09"}]}"#, &[], &[], &Settings::default(), today);
+        let ok = plan(r#"{"calories":[{"kcal":652.4,"description":"eggs","date":"2026-10-09"}]}"#, &[], &[], &Settings::default(), &Library::default(), today);
         match &ok.ops[0] {
             Op::LogCalories(c) => assert_eq!((c.kcal, c.date.to_string(), c.time), (653, "2026-10-09".to_string(), None)),
             _ => panic!(),
@@ -939,7 +1066,7 @@ mod tests {
         let text = r##"{"settings":{"colors":{"calories":"#ff9a50"},"quiet_start":"23:00",
             "categories":[{"name":"meal","icon":"☕","style":"vine"},{"name":"study","icon":"📚","color":"#3366FF"},{"name":"chore","rename":"chores"}],
             "delete_categories":["event"]}}"##;
-        let p = plan(text, &[chore], &[], &current, today);
+        let p = plan(text, &[chore], &[], &current, &Library::default(), today);
         assert!(p.errors.is_empty(), "{:?}", p.errors);
         let Op::Settings(ch) = &p.ops[0] else { panic!() };
         assert_eq!(ch.new.colors.calories.as_deref(), Some("#FF9A50"));
@@ -952,7 +1079,37 @@ mod tests {
         assert_eq!(ch.renames.get("chore").map(String::as_str), Some("chores"));
         assert!(ch.lines.iter().any(|l| l.contains("rename category chore → chores (1 tasks")));
         // bad values are rejected with reasons, nothing applied
-        let bad = plan(r##"{"settings":{"colors":{"calories":"orange","sky":"#000000"},"quiet_end":"late","google_client_secret":"x","delete_categories":["task"]}}"##, &[], &[], &current, today);
+        let bad = plan(r##"{"settings":{"colors":{"calories":"orange","sky":"#000000"},"quiet_end":"late","google_client_secret":"x","delete_categories":["task"]}}"##, &[], &[], &current, &Library::default(), today);
         assert_eq!(bad.errors.len(), 5, "{:?}", bad.errors);
+    }
+
+    #[test]
+    fn calories_from_the_food_library_and_saving_foods() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 11).unwrap();
+        let lib = Library {
+            version: 1,
+            foods: vec![Food { id: "k".into(), name: "Kvarg".into(), kcal_per_100g: 62.0, serving_g: 250.0, serving_name: "jar".into(), protein_per_100g: Some(11.0), ..Default::default() }],
+            meals: vec![],
+        };
+        let p = plan(r#"{"calories":[{"food":"kvarg","servings":2},{"food":"Kvarg","grams":100,"kcal":999}]}"#, &[], &[], &Settings::default(), &lib, today);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let kcals: Vec<u32> = p.ops.iter().map(|o| if let Op::LogCalories(c) = o { c.kcal } else { 0 }).collect();
+        assert_eq!(kcals, [310, 62]); // computed from the library, Claude's 999 ignored
+        if let Op::LogCalories(c) = &p.ops[0] {
+            assert_eq!((c.food.as_deref(), c.grams, c.protein), (Some("Kvarg"), Some(500.0), Some(55.0)));
+        }
+        // unknown food without kcal is an error; with kcal it's a normal entry
+        let bad = plan(r#"{"calories":[{"food":"burrito"}]}"#, &[], &[], &Settings::default(), &lib, today);
+        assert_eq!(bad.errors.len(), 1);
+        let ok = plan(r#"{"calories":[{"food":"burrito","kcal":800}]}"#, &[], &[], &Settings::default(), &lib, today);
+        assert!(ok.errors.is_empty());
+        // saving foods: new, and a partial update of an existing one
+        let f = plan(r#"{"foods":[{"name":"Oats","kcal_per_100g":370,"serving_g":40},{"name":"kvarg","serving_g":500}]}"#, &[], &[], &Settings::default(), &lib, today);
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
+        if let Op::SaveFood(k) = &f.ops[1] {
+            assert_eq!((k.id.as_str(), k.kcal_per_100g, k.serving_g), ("k", 62.0, 500.0));
+        }
+        let nf = plan(r#"{"foods":[{"name":"Mystery"}]}"#, &[], &[], &Settings::default(), &lib, today);
+        assert_eq!(nf.errors.len(), 1); // a new food needs kcal
     }
 }
