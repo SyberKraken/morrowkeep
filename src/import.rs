@@ -576,6 +576,8 @@ const SIMPLE_SETTINGS: &[&str] = &[
     "calorie_reminder_after",
     "remind_weight",
     "weight_reminder_after",
+    "remind_journal",
+    "journal_reminder_after",
     "quiet_start",
     "quiet_end",
     "close_to_tray",

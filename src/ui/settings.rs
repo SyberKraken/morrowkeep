@@ -618,6 +618,12 @@ impl SettingsPage {
                 ui.add(egui::TextEdit::singleline(&mut self.draft.weight_reminder_after).desired_width(50.0));
             });
             ui.end_row();
+            ui.label("");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.draft.remind_journal, "Nothing in the journal after");
+                ui.add(egui::TextEdit::singleline(&mut self.draft.journal_reminder_after).desired_width(50.0));
+            });
+            ui.end_row();
             ui.label("Quiet hours");
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.draft.quiet_start).desired_width(50.0));
@@ -626,17 +632,18 @@ impl SettingsPage {
             });
             ui.end_row();
         });
-        note(ui, "Calorie and weight reminders have input boxes, so you can log right from the notification. Typing a food description instead of a number opens Morrowkeep and estimates it with Claude.");
+        note(ui, "Calorie, weight and journal reminders have input boxes, so you can log or write right from the notification. Typing a food description instead of a number opens Morrowkeep and estimates it with Claude.");
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button("Send test reminder").clicked() {
                 // Always show both input boxes in the test, so they can be tried out.
                 let mut r = crate::notify::pending_reminder(data).unwrap_or_default();
                 if r.lines.is_empty() {
-                    r.lines.push("Test reminder. Try logging calories or weight below.".into());
+                    r.lines.push("Test reminder. Try logging calories, weight or a journal line below.".into());
                 }
                 r.ask_kcal = true;
                 r.ask_weight = true;
+                r.ask_journal = true;
                 self.reminder_msg = Some(match crate::notify::show(&data.paths, &r) {
                     Ok(()) => ("Test reminder sent".into(), true),
                     Err(e) => (e, false),

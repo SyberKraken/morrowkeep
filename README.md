@@ -69,9 +69,10 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   the target date, the planned path, and where your recent pace leads (dotted). When the
   target date is within one more period, the charts extend to it.
 - **Reminders.** Windows notifications, also while Morrowkeep is in the tray: unfinished "anytime"
-  items for today, no calories logged after 18:00, and no weight logged after 10:00. At most one
+  items for today, no calories logged after 18:00, no weight logged after 10:00, and nothing in
+  the journal after 21:00. At most one
   every 60 minutes, with quiet hours (22:00–08:00).
-  - Calorie and weight reminders have **input boxes**, so you can log right from the
+  - Calorie, weight and journal reminders have **input boxes**, so you can log right from the
     notification. Type a number for kcal, or a food description to have Morrowkeep open and
     estimate it with Claude.
   - Buttons: **Log**, **Open Morrowkeep** and **Snooze 2h**. Configure everything under

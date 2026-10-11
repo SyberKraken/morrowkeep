@@ -142,9 +142,9 @@ only what was asked and leave everything else out.
 | `delete_categories` | Names to delete; their tasks become `task`. `task` can't be deleted or renamed. |
 | `theme`, `font` | One of the available themes / fonts listed in the context. |
 | `default_input_mode` | `local` or `claude`. |
-| `reminders_enabled`, `remind_anytime`, `remind_calories`, `remind_weight`, `close_to_tray`, `always_on_top`, `auto_sync` | `true` / `false`. |
+| `reminders_enabled`, `remind_anytime`, `remind_calories`, `remind_weight`, `remind_journal`, `close_to_tray`, `always_on_top`, `auto_sync` | `true` / `false`. |
 | `reminder_interval_min`, `sync_interval_min` | Minutes, a whole number. |
-| `calorie_reminder_after`, `weight_reminder_after`, `quiet_start`, `quiet_end` | `HH:MM`. |
+| `calorie_reminder_after`, `weight_reminder_after`, `journal_reminder_after`, `quiet_start`, `quiet_end` | `HH:MM`. |
 
 For relative requests ("a little brighter", "less saturated", "warmer"), start from the
 current color in the context and make a modest change (about 10–20% in lightness or

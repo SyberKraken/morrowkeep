@@ -94,6 +94,9 @@ pub struct Settings {
     /// Remind when no weight is logged by `weight_reminder_after`.
     pub remind_weight: bool,
     pub weight_reminder_after: String,
+    /// Remind when nothing is written in the journal by `journal_reminder_after`.
+    pub remind_journal: bool,
+    pub journal_reminder_after: String,
     /// No reminders between these times ("HH:MM"; may cross midnight).
     pub quiet_start: String,
     pub quiet_end: String,
@@ -134,6 +137,8 @@ impl Default for Settings {
             calorie_reminder_after: "18:00".into(),
             remind_weight: true,
             weight_reminder_after: "10:00".into(),
+            remind_journal: true,
+            journal_reminder_after: "21:00".into(),
             quiet_start: "22:00".into(),
             quiet_end: "08:00".into(),
             default_input_mode: "local".into(),

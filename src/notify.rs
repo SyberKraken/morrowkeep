@@ -1,9 +1,9 @@
 //! Windows toast reminders: unfinished "anytime" tasks for today, no calories logged by the
-//! evening, no weight logged by the morning. Checked by the background worker, so they also
-//! fire while Morrowkeep is only in the tray.
+//! evening, no weight logged by the morning, nothing written in the journal by the evening.
+//! Checked by the background worker, so they also fire while Morrowkeep is only in the tray.
 //!
-//! When calories or weight are missing, the toast has input boxes and a "Log" button, so
-//! they can be entered right from the notification.
+//! When calories, weight or a journal entry are missing, the toast has input boxes and a
+//! "Log" button, so they can be entered right from the notification.
 
 use crate::model::{occurrences, CalorieEntry};
 use crate::store::{Data, Paths, Settings};
@@ -82,6 +82,7 @@ pub struct Reminder {
     pub lines: Vec<String>,
     pub ask_kcal: bool,
     pub ask_weight: bool,
+    pub ask_journal: bool,
 }
 
 /// What to remind about right now, or None if there's nothing.
@@ -109,11 +110,17 @@ pub fn pending_reminder(data: &Data) -> Option<Reminder> {
     let after = |t: &str, default: u32| now.time() >= parse_hm(t).unwrap_or(NaiveTime::from_hms_opt(default, 0, 0).unwrap());
     r.ask_kcal = s.remind_calories && after(&s.calorie_reminder_after, 18) && data.calories_on(today) == 0;
     r.ask_weight = s.remind_weight && after(&s.weight_reminder_after, 10) && data.weight_on(today).is_none();
-    match (r.ask_kcal, r.ask_weight) {
-        (true, true) => r.lines.push("Nothing logged today: calories and weight. Enter them below.".into()),
-        (true, false) => r.lines.push("No calories logged today. What did you eat?".into()),
-        (false, true) => r.lines.push("No weight logged today. Enter it below.".into()),
-        (false, false) => {}
+    r.ask_journal = s.remind_journal && after(&s.journal_reminder_after, 21) && data.journal_on(today) == 0;
+    let missing: Vec<&str> = [(r.ask_kcal, "calories"), (r.ask_weight, "weight"), (r.ask_journal, "journal")]
+        .into_iter()
+        .filter_map(|(ask, what)| ask.then_some(what))
+        .collect();
+    match missing.as_slice() {
+        [] => {}
+        ["calories"] => r.lines.push("No calories logged today. What did you eat?".into()),
+        ["weight"] => r.lines.push("No weight logged today. Enter it below.".into()),
+        ["journal"] => r.lines.push("Nothing in your journal today. How was your day?".into()),
+        many => r.lines.push(format!("Not logged yet today: {}. Enter them below.", many.join(", "))),
     }
     (!r.lines.is_empty()).then_some(r)
 }
@@ -146,7 +153,10 @@ fn toast_xml(paths: &Paths, r: &Reminder) -> String {
     if r.ask_weight {
         xml += r#"<input id="weight" type="text" placeHolderContent="Weight in kg, e.g. 82.4"/>"#;
     }
-    if r.ask_kcal || r.ask_weight {
+    if r.ask_journal {
+        xml += r#"<input id="journal" type="text" placeHolderContent="A line about today for your journal (#tags work)"/>"#;
+    }
+    if r.ask_kcal || r.ask_weight || r.ask_journal {
         xml += r#"<action content="Log" arguments="log"/>"#;
     }
     xml += r#"<action content="Open Morrowkeep" arguments="open"/><action content="Snooze 2h" arguments="snooze"/></actions></toast>"#;
@@ -169,7 +179,7 @@ fn show_xml(xml: &str, keep: bool) -> windows::core::Result<()> {
                 .map(|h| h.to_string().trim().to_string())
                 .unwrap_or_default()
         };
-        on_action(&action, &input("kcal"), &input("weight"));
+        on_action(&action, &input("kcal"), &input("weight"), &input("journal"));
         Ok(())
     }))?;
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))?.Show(&toast)?;
@@ -197,7 +207,7 @@ fn confirm(text: &str) {
 }
 
 /// Handles a click on a toast (body or button) including values typed into it.
-fn on_action(action: &str, kcal: &str, weight: &str) {
+fn on_action(action: &str, kcal: &str, weight: &str, journal: &str) {
     match action {
         "snooze" => {
             SNOOZE_UNTIL.store(Local::now().timestamp() + 2 * 3600, Ordering::Relaxed);
@@ -225,6 +235,11 @@ fn on_action(action: &str, kcal: &str, weight: &str) {
                 }
                 _ => problems.push(format!("couldn't read weight \"{weight}\"")),
             }
+        }
+        if !journal.is_empty() {
+            d.journal.push(crate::journal::JournalEntry::new(journal));
+            d.save_journal();
+            done.push("journal entry".to_string());
         }
         if !kcal.is_empty() {
             match kcal.trim_end_matches("kcal").trim().parse::<u32>() {
@@ -290,7 +305,10 @@ mod tests {
         let paths = Paths::resolve();
         let plain = toast_xml(&paths, &Reminder { lines: vec!["2 things left".into()], ..Default::default() });
         assert!(!plain.contains("<input"));
-        let both = toast_xml(&paths, &Reminder { lines: vec!["a & b".into()], ask_kcal: true, ask_weight: true });
+        let both = toast_xml(&paths, &Reminder { lines: vec!["a & b".into()], ask_kcal: true, ask_weight: true, ask_journal: false });
+        assert!(!both.contains(r#"id="journal""#));
+        let j = toast_xml(&paths, &Reminder { lines: vec!["j".into()], ask_journal: true, ..Default::default() });
+        assert!(j.contains(r#"id="journal""#) && j.contains(r#"arguments="log""#) && !j.contains(r#"id="kcal""#));
         assert!(both.contains(r#"id="kcal""#) && both.contains(r#"id="weight""#) && both.contains(r#"arguments="log""#));
         assert!(both.contains("a &amp; b"));
     }
