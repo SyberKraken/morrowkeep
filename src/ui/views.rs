@@ -468,14 +468,16 @@ pub fn today_side(ui: &mut Ui, data: &Data, cal: &mut CalorieInput, journal: &mu
     });
 }
 
-/// Main area of the Habits page: the constellation and the board of today's anytime items.
+/// Main area of the Habits page: the constellation and the board of today's tasks (scheduled
+/// ones first, by time, then the anytime ones).
 /// Fills the window; the tiles scale with its width.
 pub fn today(ui: &mut Ui, data: &Data, board: &mut BoardState, actions: &mut Vec<Action>) {
     let today = Local::now().date_naive();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.add_space(8.0);
-        let (_, untimed) = entries_for(data, today);
-        let board_ids: Vec<usize> = untimed.iter().filter_map(|e| if let Entry::Item(i) = e { Some(*i) } else { None }).collect();
+        // every task today is a card: scheduled ones first (by time), then the anytime ones
+        let (timed, untimed) = entries_for(data, today);
+        let board_ids: Vec<usize> = timed.iter().chain(untimed.iter()).filter_map(|e| if let Entry::Item(i) = e { Some(*i) } else { None }).collect();
         let all_day: Vec<String> =
             untimed.iter().filter_map(|e| if let Entry::Ext(i) = e { Some(data.gcache[*i].title.clone()) } else { None }).collect();
         anytime_board(ui, data, today, &board_ids, &all_day, board, actions);

@@ -96,11 +96,21 @@ fn draw_tile(ui: &Ui, rect: Rect, item: &Item, done_now: bool, flip: f32, hovere
     // icon
     let icon_color = if showing_done { super::theme::th().text.on_color } else { color };
     clip.text(r.left_top() + Vec2::new(pad, pad - 2.0), Align2::LEFT_TOP, kind_icon(&item.kind), FontId::proportional(24.0 * k), icon_color);
-    // checkmark / repeat hint, top-right
+    // checkmark / time and repeat hint, top-right
     if showing_done {
         clip.text(r.right_top() + Vec2::new(-pad, pad - 4.0), Align2::RIGHT_TOP, "✔", FontId::proportional(28.0 * k), super::theme::th().text.on_color);
-    } else if item.repeat.is_some() && item.kind != "habit" {
-        clip.text(r.right_top() + Vec2::new(-pad, pad), Align2::RIGHT_TOP, "🔁", FontId::proportional(13.0 * k), visuals.weak_text_color());
+    } else {
+        let repeat = item.repeat.is_some() && item.kind != "habit";
+        let hint = match (item.time, repeat) {
+            (Some(t), true) => format!("🔁 {}", t.format("%H:%M")),
+            (Some(t), false) => t.format("%H:%M").to_string(),
+            (None, true) => "🔁".into(),
+            (None, false) => String::new(),
+        };
+        if !hint.is_empty() {
+            let (size, ink) = if item.time.is_some() { (14.0 * k, visuals.text_color()) } else { (13.0 * k, visuals.weak_text_color()) };
+            clip.text(r.right_top() + Vec2::new(-pad, pad), Align2::RIGHT_TOP, hint, FontId::proportional(size), ink);
+        }
     }
     // title, bottom-left, up to 2 lines
     let galley = clip.layout_job(wrapped(&item.title, 16.0 * k, ink, r.width() - 2.0 * pad, 2));
