@@ -302,7 +302,7 @@ impl Data {
         match read_json::<JournalFile>(&self.paths.journal) {
             Ok(f) => {
                 self.journal = f.map(|f| f.entries).unwrap_or_default();
-                self.journal.sort_by_key(|e| (e.date, e.time));
+                self.journal.sort_by_key(crate::journal::sort_key);
             }
             Err(e) => errors.push(format!("journal.json could not be read: {e}")),
         }
@@ -346,7 +346,7 @@ impl Data {
         if self.load_error.is_some() {
             return;
         }
-        self.journal.sort_by_key(|e| (e.date, e.time));
+        self.journal.sort_by_key(crate::journal::sort_key);
         let file = JournalFile { version: 1, entries: self.journal.clone() };
         match write_json(&self.paths.journal, &file) {
             Ok(()) => self.journal_mtime = mtime(&self.paths.journal),

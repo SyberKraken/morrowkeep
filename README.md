@@ -227,6 +227,11 @@ goes to Claude, which can plan, log food, record weight, tick off tasks and chan
 reminders before 9"). Settings changes show up in the preview, with color swatches, before you
 apply them.
 
+Anything can be logged for another day: "make a journal entry for yesterday", "I ate a burrito
+last night", "I did the vacuuming yesterday". Just after midnight Claude is told that the day
+that just ended is probably the one you mean, so "tonight I had pasta" at 00:30 lands on
+yesterday.
+
 ### Tasks
 
 | you type / say | becomes |

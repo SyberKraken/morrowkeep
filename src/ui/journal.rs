@@ -297,7 +297,7 @@ impl JournalUi {
         };
         let mut notes = String::new();
         for e in week {
-            notes += &format!("\n[{} {}]", e.date.format("%a %b %-d"), e.time.format("%H:%M"));
+            notes += &format!("\n[{} {}]", e.date.format("%a %b %-d"), journal::time_label(e));
             if let Some(m) = e.mood {
                 notes += &format!(" mood: {}", journal::mood_label(m));
             }
@@ -701,7 +701,8 @@ impl JournalUi {
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(e.time.format("%H:%M").to_string()).color(t.text.muted).monospace());
+                ui.label(RichText::new(journal::time_label(e)).color(t.text.muted).monospace())
+                    .on_hover_text(if e.time.is_some() { "When it was written" } else { "Added afterwards for this day" });
                 if reflection {
                     ui.label(RichText::new("✨ Reflection by Claude").color(claude_color()).size(12.5));
                 }

@@ -34,6 +34,25 @@ code fence around it is fine.
 A bare JSON array of items is also accepted. An optional top-level `"message"` string is shown
 to the user, e.g. to mention an assumption you made.
 
+## Other days (yesterday, last night, after midnight)
+
+Everything you log belongs to **today** unless you say otherwise, so when the user talks about
+another day, always give the date:
+
+- A top-level `"date"` (`YYYY-MM-DD`, or `yesterday`) sets the day for **every** calorie,
+  weight and journal entry and every `"done"` in the import that doesn't give its own:
+
+  ```json
+  { "morrowkeep_import": 1, "date": "2026-10-13",
+    "journal": [ { "text": "Long walk, felt calm." } ],
+    "calories": [ { "kcal": 650, "description": "pasta" } ],
+    "items": [ { "id": "<id>", "done": true } ] }
+  ```
+- Or set `date` on a single entry (`done_date` for a task).
+- **After midnight**, "today", "tonight" or "this evening" usually means the day that just
+  ended; the context says so when it's past midnight. Use that date.
+- Entries for an earlier day get no clock time unless you give one (`"time": "22:30"`).
+
 ## Item fields
 
 | field | required | format / meaning |

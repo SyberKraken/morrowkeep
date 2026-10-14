@@ -11,8 +11,9 @@ use std::path::Path;
 pub struct JournalEntry {
     pub id: String,
     pub date: NaiveDate,
-    #[serde(with = "hm")]
-    pub time: NaiveTime,
+    /// When it was written; None for an entry added afterwards for an earlier day.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "hm")]
+    pub time: Option<NaiveTime>,
     /// What you typed (can be empty for a voice entry).
     #[serde(default)]
     pub text: String,
@@ -46,13 +47,29 @@ fn is_note(k: &str) -> bool {
 mod hm {
     use chrono::NaiveTime;
     use serde::{Deserialize, Deserializer, Serializer};
-    pub fn serialize<S: Serializer>(t: &NaiveTime, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&t.format("%H:%M").to_string())
+    pub fn serialize<S: Serializer>(t: &Option<NaiveTime>, s: S) -> Result<S::Ok, S::Error> {
+        match t {
+            Some(t) => s.serialize_str(&t.format("%H:%M").to_string()),
+            None => s.serialize_none(),
+        }
     }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<NaiveTime, D::Error> {
-        let s = String::deserialize(d)?;
-        NaiveTime::parse_from_str(&s, "%H:%M").or_else(|_| NaiveTime::parse_from_str(&s, "%H:%M:%S")).map_err(serde::de::Error::custom)
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<NaiveTime>, D::Error> {
+        match Option::<String>::deserialize(d)? {
+            None => Ok(None),
+            Some(s) if s.trim().is_empty() => Ok(None),
+            Some(s) => NaiveTime::parse_from_str(&s, "%H:%M").or_else(|_| NaiveTime::parse_from_str(&s, "%H:%M:%S")).map(Some).map_err(serde::de::Error::custom),
+        }
     }
+}
+
+/// Order within a day: by time, with untimed entries (added later for that day) last.
+pub fn sort_key(e: &JournalEntry) -> (NaiveDate, NaiveTime) {
+    (e.date, e.time.unwrap_or(NaiveTime::from_hms_opt(23, 59, 59).unwrap()))
+}
+
+/// "21:40", or "–" for an entry without a time.
+pub fn time_label(e: &JournalEntry) -> String {
+    e.time.map(|t| t.format("%H:%M").to_string()).unwrap_or_else(|| "–".into())
 }
 
 impl JournalEntry {
@@ -61,7 +78,7 @@ impl JournalEntry {
         JournalEntry {
             id: uuid::Uuid::new_v4().to_string(),
             date: now.date_naive(),
-            time: now.time(),
+            time: Some(now.time()),
             text: text.into(),
             audio: None,
             audio_secs: None,
@@ -196,7 +213,7 @@ pub fn read_wav(path: &Path) -> Result<Vec<f32>, String> {
 /// The whole journal as Markdown, oldest first.
 pub fn to_markdown(entries: &[JournalEntry]) -> String {
     let mut sorted: Vec<&JournalEntry> = entries.iter().collect();
-    sorted.sort_by_key(|e| (e.date, e.time));
+    sorted.sort_by_key(|e| sort_key(e));
     let mut out = String::from("# Journal\n");
     let mut day = None;
     for e in sorted {
@@ -204,7 +221,7 @@ pub fn to_markdown(entries: &[JournalEntry]) -> String {
             day = Some(e.date);
             out += &format!("\n## {}\n", e.date.format("%A, %B %-d, %Y"));
         }
-        let mut head = format!("\n### {}", e.time.format("%H:%M"));
+        let mut head = format!("\n### {}", time_label(e));
         if e.kind == "reflection" {
             head += " · Reflection (Claude)";
         }

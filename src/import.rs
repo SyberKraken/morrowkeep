@@ -5,7 +5,7 @@ use crate::foods::{Amount, Food, Library};
 use crate::model::{CalorieEntry, Item, Repeat, WeightEntry};
 use crate::parse::{parse_date, parse_duration, parse_time};
 use crate::store::{Data, Settings, IMPORT_FORMAT};
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate, Timelike};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -53,7 +53,7 @@ impl Op {
             Op::LogWeight(w) => format!("+ weight {:.1} kg · {}", w.kg, w.date.format("%a %b %-d")),
             Op::Settings(s) => s.lines.join("\n"),
             Op::SaveFood(f) => format!("+ food {} · {:.0} kcal/100 g · 1 {} = {:.0} g", f.name, f.kcal_per_100g, f.serving_name, f.serving_g),
-            Op::Journal(e) => format!("+ journal {} {} · {}", e.date.format("%a %b %-d"), e.time.format("%H:%M"), e.text),
+            Op::Journal(e) => format!("+ journal {} {} · {}", e.date.format("%a %b %-d"), crate::journal::time_label(e), e.text),
         }
     }
 }
@@ -118,9 +118,19 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
     };
     let mut cal_entries = Vec::new();
     let mut weight_entries = Vec::new();
+    // Day that calories, weight, journal entries and check-offs belong to unless they say
+    // otherwise: today, or the import's top-level "date" (e.g. yesterday, after midnight).
+    let mut day = today;
     let (items, deletes) = match value {
         Value::Array(a) => (a, Vec::new()),
         Value::Object(mut o) => {
+            match o.remove("date") {
+                None | Some(Value::Null) => {}
+                Some(v) => match v.as_str().and_then(|d| parse_date(d, today)) {
+                    Some(d) => day = d,
+                    None => plan.errors.push("\"date\": use YYYY-MM-DD (or yesterday-style words)".into()),
+                },
+            }
             let items = match o.remove("items") {
                 Some(Value::Array(a)) => a,
                 None => Vec::new(),
@@ -162,7 +172,7 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
             match o.remove("journal") {
                 Some(Value::Array(a)) => {
                     for (n, v) in a.into_iter().enumerate() {
-                        match journal_from(v, today) {
+                        match journal_from(v, today, day) {
                             Ok(e) => plan.ops.push(Op::Journal(e)),
                             Err(e) => plan.errors.push(format!("journal {}: {e}", n + 1)),
                         }
@@ -199,7 +209,7 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
             plan.errors.push(format!("{label}: must be an object"));
             continue;
         };
-        match item_from(obj, existing, today) {
+        match item_from(obj, existing, today, day) {
             Ok(op) => plan.ops.push(op),
             Err(errs) => plan.errors.extend(errs.into_iter().map(|e| format!("{label}: {e}"))),
         }
@@ -210,7 +220,7 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
             plan.errors.push(format!("{label}: must be an object"));
             continue;
         };
-        match calories_from(obj, today, foods) {
+        match calories_from(obj, today, day, foods) {
             Ok(c) => plan.ops.push(Op::LogCalories(c)),
             Err(errs) => plan.errors.extend(errs.into_iter().map(|e| format!("{label}: {e}"))),
         }
@@ -219,7 +229,7 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
         let label = format!("weight {}", n + 1);
         let kg = v.get("kg").and_then(Value::as_f64);
         let date = match v.get("date").and_then(Value::as_str) {
-            None => Some(today),
+            None => Some(day),
             Some(d) => parse_date(d, today),
         };
         let unknown: Vec<&String> = v.as_object().map(|o| o.keys().filter(|k| *k != "kg" && *k != "date").collect()).unwrap_or_default();
@@ -253,12 +263,12 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
     plan
 }
 
-fn calories_from(o: Map<String, Value>, today: NaiveDate, foods: &Library) -> Result<CalorieEntry, Vec<String>> {
+fn calories_from(o: Map<String, Value>, today: NaiveDate, day: NaiveDate, foods: &Library) -> Result<CalorieEntry, Vec<String>> {
     let mut errs = Vec::new();
     let mut kcal = None;
     let mut food: Option<String> = None;
     let mut amount = None;
-    let mut date = today;
+    let mut date = day;
     let mut time = None;
     let mut description = String::new();
     for (key, val) in o {
@@ -331,7 +341,7 @@ fn calories_from(o: Map<String, Value>, today: NaiveDate, foods: &Library) -> Re
     Ok(entry)
 }
 
-fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate) -> Result<Op, Vec<String>> {
+fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate, day: NaiveDate) -> Result<Op, Vec<String>> {
     let mut errs = Vec::new();
     let (mut item, is_update) = match o.remove("id") {
         Some(Value::String(id)) => match existing.iter().find(|i| i.id == id) {
@@ -447,12 +457,18 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate) -> 
     if let Some(done) = done_flag {
         if item.repeat.is_some() {
             // repeating items are done per occurrence: today unless done_date says otherwise
-            let day = done_date.unwrap_or(today);
-            if item.is_done_on(day) != done {
-                item.toggle_done(day);
+            let on = done_date.unwrap_or(day);
+            if item.is_done_on(on) != done {
+                item.toggle_done(on);
             }
         } else {
             item.set_done(done);
+            if done {
+                // finished on another day (e.g. "I did it yesterday")
+                if let Some(d) = done_date.or((day != today).then_some(day)) {
+                    item.done_on = Some(d);
+                }
+            }
         }
     }
     if item.title.is_empty() {
@@ -646,20 +662,29 @@ fn food_from(v: Value, foods: &Library) -> Result<Food, String> {
 }
 
 /// A journal entry from an import: {"text", "date"?, "time"?, "mood"? (1-5)}.
-fn journal_from(v: Value, today: NaiveDate) -> Result<crate::journal::JournalEntry, String> {
+fn journal_from(v: Value, today: NaiveDate, day: NaiveDate) -> Result<crate::journal::JournalEntry, String> {
     let Value::Object(o) = v else { return Err("must be an object".into()) };
     let mut e = crate::journal::JournalEntry::new("");
+    e.date = day;
+    let mut timed = false;
     for (k, val) in o {
         match k.as_str() {
             "text" => e.text = val.as_str().map(|s| s.trim().to_string()).ok_or("\"text\" must be text")?,
             "date" => e.date = val.as_str().and_then(|d| parse_date(d, today)).ok_or("\"date\": use YYYY-MM-DD")?,
-            "time" => e.time = val.as_str().and_then(parse_time).ok_or("\"time\": use HH:MM")?,
+            "time" => {
+                e.time = Some(val.as_str().and_then(parse_time).ok_or("\"time\": use HH:MM")?);
+                timed = true;
+            }
             "mood" => e.mood = Some(val.as_u64().filter(|m| (1..=5).contains(m)).ok_or("\"mood\" must be 1 to 5")? as u8),
             other => return Err(format!("unknown field \"{other}\" (expected text, date, time, mood)")),
         }
     }
     if e.text.is_empty() {
         return Err("\"text\" is required".into());
+    }
+    // written now for an earlier day: the current clock time would be misleading
+    if !timed && e.date != today {
+        e.time = None;
     }
     Ok(e)
 }
@@ -966,7 +991,17 @@ pub fn ai_context(data: &Data, days_ahead: i64) -> String {
         now.format("%H:%M"),
         iana_time_zone::get_timezone().unwrap_or_else(|_| "local".into()),
         {
-            let mut t = match data.weights.last() {
+            let mut t = String::new();
+            if now.hour() < 5 {
+                let ended = today - Duration::days(1);
+                t += &format!(
+                    "It's just past midnight: the day that just ended was {} ({}). When I talk about \"today\", \"tonight\" or \"this evening\" now, I most likely mean {}, so set \"date\" to it.\n\n",
+                    ended.format("%Y-%m-%d"),
+                    ended.format("%A"),
+                    ended.format("%Y-%m-%d")
+                );
+            }
+            t += &match data.weights.last() {
                 Some(w) => format!("Latest weight: {:.1} kg on {}.", w.kg, w.date),
                 None => "No weight logged yet.".to_string(),
             };
@@ -1111,5 +1146,38 @@ mod tests {
         }
         let nf = plan(r#"{"foods":[{"name":"Mystery"}]}"#, &[], &[], &Settings::default(), &lib, today);
         assert_eq!(nf.errors.len(), 1); // a new food needs kcal
+    }
+
+    #[test]
+    fn entries_for_another_day() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 15).unwrap();
+        let yesterday = today - Duration::days(1);
+        let mut task = Item::new("Vacuum");
+        task.id = "v".into();
+        let mut run = Item::new("Run");
+        run.id = "r".into();
+        run.date = Some(today - Duration::days(10));
+        run.repeat = Some("daily".into());
+        // a top-level date applies to everything that doesn't name its own
+        let text = r#"{"date":"yesterday","journal":[{"text":"Quiet day"}],"calories":[{"kcal":500,"description":"pasta"}],
+            "weight":[{"kg":82}],"items":[{"id":"v","done":true},{"id":"r","done":true}]}"#;
+        let p = plan(text, &[task, run], &[], &Settings::default(), &Library::default(), today);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        for op in &p.ops {
+            match op {
+                Op::Journal(e) => assert_eq!((e.date, e.time), (yesterday, None)),
+                Op::LogCalories(c) => assert_eq!((c.date, c.time), (yesterday, None)),
+                Op::LogWeight(w) => assert_eq!(w.date, yesterday),
+                Op::Update(i) if i.id == "v" => assert_eq!(i.done_on, Some(yesterday)),
+                Op::Update(i) => assert!(i.is_done_on(yesterday) && !i.is_done_on(today)),
+                _ => panic!("unexpected op"),
+            }
+        }
+        // per-entry dates and times still win; no top-level date means today
+        let p = plan(r#"{"journal":[{"text":"a","date":"2026-10-10","time":"23:40"},{"text":"b"}]}"#, &[], &[], &Settings::default(), &Library::default(), today);
+        let Op::Journal(a) = &p.ops[0] else { panic!() };
+        assert_eq!((a.date.to_string(), a.time.map(|t| t.to_string())), ("2026-10-10".into(), Some("23:40:00".into())));
+        let Op::Journal(b) = &p.ops[1] else { panic!() };
+        assert!(b.date == today && b.time.is_some());
     }
 }
