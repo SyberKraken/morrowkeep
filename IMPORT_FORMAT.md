@@ -48,7 +48,14 @@ another day, always give the date:
     "calories": [ { "kcal": 650, "description": "pasta" } ],
     "items": [ { "id": "<id>", "done": true } ] }
   ```
-- Or set `date` on a single entry (`done_date` for a task).
+- Or set `date` on a single entry (`done_date` for a task), or give a task several days at
+  once with `"done_dates": ["2026-10-12", "2026-10-13"]`.
+- **Filling in gaps:** the context lists the last 14 days (calories, weight, journal) and, for
+  repeating tasks, the days already ticked off (`done_recently`), plus unfinished one-off tasks
+  from the last 30 days. Log only what's missing, each on its own day; don't repeat entries
+  that are already there.
+- Dates can be `YYYY-MM-DD` (preferred), `yesterday`, `day before yesterday`, `3 days ago`,
+  `last monday`, or `-2d`.
 - **After midnight**, "today", "tonight" or "this evening" usually means the day that just
   ended; the context says so when it's past midnight. Use that date.
 - Entries for an earlier day get no clock time unless you give one (`"time": "22:30"`).
@@ -68,6 +75,7 @@ another day, always give the date:
 | `notes` | no | Free text. Use `\n` for new lines (e.g. a recipe or an exercise list). |
 | `tags` | no | Array of strings. |
 | `done` | no | `true` / `false`. On a repeating item it marks one occurrence: today's, or the day in `done_date`. To tick off a task the user says they did, send its `id` with `"done": true`. |
+| `done_dates` | no | Array of `YYYY-MM-DD`: tick off a repeating item on each of these days (for filling in missed check-offs). On a one-off item: done, on the latest of them. |
 | `done_date` | no | `YYYY-MM-DD`: which occurrence `done` applies to (repeating items). Default today. |
 | `sync_google` | no | `false` to keep the item out of Google Calendar. Default `true`. |
 | `id` | no | Only to **update** an existing item: copy its id from the context Morrowkeep gave you. Fields you leave out keep their current values. To clear a field, set it to `null`. |

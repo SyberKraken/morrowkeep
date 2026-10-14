@@ -230,7 +230,10 @@ apply them.
 Anything can be logged for another day: "make a journal entry for yesterday", "I ate a burrito
 last night", "I did the vacuuming yesterday". Just after midnight Claude is told that the day
 that just ended is probably the one you mean, so "tonight I had pasta" at 00:30 lands on
-yesterday.
+yesterday. To fill in gaps ("I drank 2L water on monday and tuesday, weighed 82.3 on
+tuesday"), Claude sees the last 14 days (calories, weight, journal) and each habit's recent
+check-offs, logs each thing on its own day, and the preview shows exactly which days get
+ticked off.
 
 ### Tasks
 

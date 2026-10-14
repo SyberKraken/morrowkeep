@@ -112,6 +112,15 @@ fn date_at(t: &[&str], i: usize, today: NaiveDate) -> Option<(NaiveDate, usize)>
         "today" | "tonight" => return Some((today, 1)),
         "tomorrow" | "tmrw" => return Some((today + Duration::days(1), 1)),
         "yesterday" => return Some((today - Duration::days(1), 1)),
+        "day" if next == Some("before") && t.get(i + 2) == Some(&"yesterday") => {
+            return Some((today - Duration::days(2), 3))
+        }
+        // "last monday": the most recent one before today
+        "last" => {
+            let wd = next.and_then(parse_weekday)?;
+            let back = (today.weekday().num_days_from_monday() as i64 - wd.num_days_from_monday() as i64 + 7) % 7;
+            return Some((today - Duration::days(if back == 0 { 7 } else { back }), 2));
+        }
         "day" if next == Some("after") && t.get(i + 2) == Some(&"tomorrow") => {
             return Some((today + Duration::days(2), 3))
         }
@@ -146,6 +155,26 @@ fn date_at(t: &[&str], i: usize, today: NaiveDate) -> Option<(NaiveDate, usize)>
     }
     if let Ok(d) = NaiveDate::parse_from_str(w, "%Y-%m-%d") {
         return Some((d, 1));
+    }
+    // "3 days ago", "2 weeks ago"
+    if let (Some(n), Some(unit)) = (small_number(w), next) {
+        if t.get(i + 2) == Some(&"ago") {
+            let days = match unit.trim_end_matches('s') {
+                "day" => n as i64,
+                "week" => n as i64 * 7,
+                _ => return None,
+            };
+            return Some((today - Duration::days(days), 3));
+        }
+    }
+    // "-3d", "-1w"
+    if let Some(rest) = w.strip_prefix('-') {
+        if let Some(n) = rest.strip_suffix('d').and_then(|n| n.parse::<i64>().ok()) {
+            return Some((today - Duration::days(n), 1));
+        }
+        if let Some(n) = rest.strip_suffix('w').and_then(|n| n.parse::<i64>().ok()) {
+            return Some((today - Duration::days(n * 7), 1));
+        }
     }
     if let Some(rest) = w.strip_prefix('+') {
         if let Some(n) = rest.strip_suffix('d').and_then(|n| n.parse::<i64>().ok()) {
@@ -627,6 +656,12 @@ mod tests {
         assert_eq!(parse_command("kcal 250 apple"), Some(Command::Calories { kcal: 250, what: "apple".into() }));
         assert_eq!(parse_command("snack 180kcal"), Some(Command::Calories { kcal: 180, what: "Snack".into() }));
         assert_eq!(parse_command("82,4 kg"), Some(Command::Weight(82.4)));
+        let thu = NaiveDate::from_ymd_opt(2026, 10, 15).unwrap();
+        assert_eq!(parse_date("3 days ago", thu), NaiveDate::from_ymd_opt(2026, 10, 12));
+        assert_eq!(parse_date("last thursday", thu), NaiveDate::from_ymd_opt(2026, 10, 8));
+        assert_eq!(parse_date("last monday", thu), NaiveDate::from_ymd_opt(2026, 10, 12));
+        assert_eq!(parse_date("-1w", thu), NaiveDate::from_ymd_opt(2026, 10, 8));
+        assert_eq!(parse_date("day before yesterday", thu), NaiveDate::from_ymd_opt(2026, 10, 13));
         assert_eq!(parse_command("journal: long walk, felt good #walk"), Some(Command::Journal("long walk, felt good #walk".into())));
         assert_eq!(parse_command("Dear diary, today was 82 kg of fun"), Some(Command::Journal("today was 82 kg of fun".into())));
         assert_eq!(parse_command("goal 76 kg by feb 1"), Some(Command::Goal { kg: 76.0, by: Some("feb 1".into()) }));

@@ -12,7 +12,8 @@ use std::fs;
 
 pub enum Op {
     Add(Item),
-    Update(Item),
+    /// The updated item, and what changed in its check-offs (e.g. "done Mon Oct 12").
+    Update(Item, String),
     Delete { id: String, title: String },
     LogCalories(CalorieEntry),
     LogWeight(WeightEntry),
@@ -40,7 +41,8 @@ impl Op {
         };
         match self {
             Op::Add(i) => format!("+ add [{}] {}{}", i.kind, i.title, when(i)),
-            Op::Update(i) => format!("~ update [{}] {}{}", i.kind, i.title, when(i)),
+            Op::Update(i, done) if !done.is_empty() => format!("~ {} · {done}", i.title),
+            Op::Update(i, _) => format!("~ update [{}] {}{}", i.kind, i.title, when(i)),
             Op::Delete { title, .. } => format!("- delete {title}"),
             Op::LogCalories(c) => {
                 let when = match c.time {
@@ -203,14 +205,25 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
         }
     };
 
+    // Changes build on each other: two entries for the same id both count.
+    let mut working: Vec<Item> = existing.to_vec();
     for (n, v) in items.into_iter().enumerate() {
         let label = format!("item {}", n + 1);
         let Value::Object(obj) = v else {
             plan.errors.push(format!("{label}: must be an object"));
             continue;
         };
-        match item_from(obj, existing, today, day) {
-            Ok(op) => plan.ops.push(op),
+        match item_from(obj, &working, today, day) {
+            Ok(op) => {
+                let mut op = op;
+                if let Op::Update(i, note) = &mut op {
+                    if let Some(w) = working.iter_mut().find(|w| w.id == i.id) {
+                        *note = checkoff_note(w, i);
+                        *w = i.clone();
+                    }
+                }
+                plan.ops.push(op)
+            }
             Err(errs) => plan.errors.extend(errs.into_iter().map(|e| format!("{label}: {e}"))),
         }
     }
@@ -357,6 +370,7 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate, day
     // applied after all fields, once we know whether the item repeats
     let mut done_flag: Option<bool> = None;
     let mut done_date: Option<NaiveDate> = None;
+    let mut done_dates: Vec<NaiveDate> = Vec::new();
     for (key, val) in o {
         let null = val.is_null();
         let s = val.as_str().map(str::trim);
@@ -435,6 +449,17 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate, day
                 Some(b) => done_flag = Some(b),
                 None => errs.push("\"done\" must be true or false".into()),
             },
+            "done_dates" => match val.as_array() {
+                Some(a) => {
+                    for d in a {
+                        match d.as_str().and_then(|d| parse_date(d, today)) {
+                            Some(d) => done_dates.push(d),
+                            None => errs.push(format!("\"done_dates\": {d} isn't a date (use YYYY-MM-DD)")),
+                        }
+                    }
+                }
+                None => errs.push("\"done_dates\" must be an array of dates".into()),
+            },
             "done_date" => match s.and_then(|d| parse_date(d, today)) {
                 Some(d) => done_date = Some(d),
                 None => errs.push("\"done_date\": use YYYY-MM-DD".into()),
@@ -452,6 +477,19 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate, day
             item.duration_min = Some(mins as u32);
         } else {
             errs.push("\"end\" must be after \"time\"".into());
+        }
+    }
+    // several days at once (filling in a habit's missed check-offs)
+    if !done_dates.is_empty() {
+        if item.repeat.is_some() {
+            for d in &done_dates {
+                if !item.is_done_on(*d) {
+                    item.toggle_done(*d);
+                }
+            }
+        } else {
+            item.set_done(true);
+            item.done_on = done_dates.iter().max().copied();
         }
     }
     if let Some(done) = done_flag {
@@ -484,7 +522,7 @@ fn item_from(mut o: Map<String, Value>, existing: &[Item], today: NaiveDate, day
         return Err(errs);
     }
     item.touch();
-    Ok(if is_update { Op::Update(item) } else { Op::Add(item) })
+    Ok(if is_update { Op::Update(item, String::new()) } else { Op::Add(item) })
 }
 
 /// Applies a validated plan. Returns a summary like "3 added, 1 updated".
@@ -501,7 +539,7 @@ pub fn apply(data: &mut Data, ops: Vec<Op>) -> String {
                 data.items.push(item);
                 a += 1;
             }
-            Op::Update(item) => {
+            Op::Update(item, _) => {
                 if let Some(idx) = data.item_index(&item.id) {
                     data.items[idx] = item;
                     u += 1;
@@ -659,6 +697,30 @@ fn food_from(v: Value, foods: &Library) -> Result<Food, String> {
         f.aliases = a.iter().filter_map(Value::as_str).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     }
     Ok(f)
+}
+
+/// What an update changes in an item's check-offs, for the preview ("done Mon Oct 12, Tue Oct
+/// 13", "not done Wed Oct 14"); empty if nothing changed there.
+fn checkoff_note(before: &Item, after: &Item) -> String {
+    let fmt = |ds: Vec<NaiveDate>| ds.iter().map(|d| d.format("%a %b %-d").to_string()).collect::<Vec<_>>().join(", ");
+    let mut parts = Vec::new();
+    if after.repeat.is_some() {
+        let added: Vec<NaiveDate> = after.done_dates.iter().filter(|d| !before.done_dates.contains(d)).copied().collect();
+        let removed: Vec<NaiveDate> = before.done_dates.iter().filter(|d| !after.done_dates.contains(d)).copied().collect();
+        if !added.is_empty() {
+            parts.push(format!("done {}", fmt(added)));
+        }
+        if !removed.is_empty() {
+            parts.push(format!("not done {}", fmt(removed)));
+        }
+    } else if after.done != before.done || after.done_on != before.done_on {
+        parts.push(match (after.done, after.done_on) {
+            (true, Some(d)) => format!("done {}", fmt(vec![d])),
+            (true, None) => "done".into(),
+            (false, _) => "not done".into(),
+        });
+    }
+    parts.join(" · ")
 }
 
 /// A journal entry from an import: {"text", "date"?, "time"?, "mood"? (1-5)}.
@@ -971,13 +1033,22 @@ pub fn ai_context(data: &Data, days_ahead: i64) -> String {
         .iter()
         .filter(|i| match i.date {
             None => !i.done,
-            Some(d) => i.repeat.is_some() && i.until.is_none_or(|u| u >= today) || (d >= today && d <= until),
+            // repeating, upcoming, or unfinished one-offs from the last 30 days
+            Some(d) => {
+                i.repeat.is_some() && i.until.is_none_or(|u| u >= today - Duration::days(30))
+                    || (d >= today && d <= until)
+                    || (i.repeat.is_none() && !i.done && d >= today - Duration::days(30))
+            }
         })
         .map(|i| {
             let mut v = serde_json::to_value(i).unwrap_or(Value::Null);
             if let Value::Object(o) = &mut v {
                 for k in ["created", "updated", "google_id", "google_synced", "done_dates", "sync_google"] {
                     o.remove(k);
+                }
+                if i.repeat.is_some() {
+                    let recent: Vec<String> = i.done_dates.iter().filter(|d| **d >= today - Duration::days(21)).map(|d| d.to_string()).collect();
+                    o.insert("done_recently".into(), Value::from(recent));
                 }
             }
             v
@@ -1013,6 +1084,21 @@ pub fn ai_context(data: &Data, days_ahead: i64) -> String {
                 k => t += &format!(" Daily calorie limit: {k} kcal."),
             }
             t += &format!("\n\nCategories (use these as \"kind\"): {}.", crate::categories::names().join(", "));
+            // the last two weeks at a glance, so gaps can be filled in
+            let mut days = Vec::new();
+            for k in 1..=14 {
+                let d = today - Duration::days(k);
+                let kcal = data.calories_on(d);
+                let n = data.calories.iter().filter(|c| c.date == d).count();
+                let cal = if n == 0 { "no calories".to_string() } else { format!("{kcal} kcal ({n} entr{})", if n == 1 { "y" } else { "ies" }) };
+                let w = data.weight_on(d).map_or("no weight".to_string(), |kg| format!("{kg:.1} kg"));
+                let j = match data.journal_on(d) {
+                    0 => "no journal".to_string(),
+                    n => format!("journal {n}"),
+                };
+                days.push(format!("- {} {}: {cal} · {w} · {j}", d.format("%Y-%m-%d"), d.format("%a")));
+            }
+            t += &format!("\n\nThe last 14 days (to see what's already logged before filling in gaps):\n{}", days.join("\n"));
             if !data.foods.foods.is_empty() || !data.foods.meals.is_empty() {
                 let lines: Vec<String> = data
                     .foods
@@ -1067,7 +1153,7 @@ mod tests {
             _ => panic!(),
         }
         match &p.ops[1] {
-            Op::Update(i) => assert_eq!((i.title.as_str(), i.notes.as_str()), ("Old", "changed")),
+            Op::Update(i, _) => assert_eq!((i.title.as_str(), i.notes.as_str()), ("Old", "changed")),
             _ => panic!(),
         }
         let raw_newline = plan("{\"items\":[{\"title\":\"Bowl\",\"notes\":\"line 1\nline 2\"}],\"message\":\"hi\"}", &[], &[], &Settings::default(), &Library::default(), today);
@@ -1168,8 +1254,8 @@ mod tests {
                 Op::Journal(e) => assert_eq!((e.date, e.time), (yesterday, None)),
                 Op::LogCalories(c) => assert_eq!((c.date, c.time), (yesterday, None)),
                 Op::LogWeight(w) => assert_eq!(w.date, yesterday),
-                Op::Update(i) if i.id == "v" => assert_eq!(i.done_on, Some(yesterday)),
-                Op::Update(i) => assert!(i.is_done_on(yesterday) && !i.is_done_on(today)),
+                Op::Update(i, _) if i.id == "v" => assert_eq!(i.done_on, Some(yesterday)),
+                Op::Update(i, _) => assert!(i.is_done_on(yesterday) && !i.is_done_on(today)),
                 _ => panic!("unexpected op"),
             }
         }
@@ -1179,5 +1265,28 @@ mod tests {
         assert_eq!((a.date.to_string(), a.time.map(|t| t.to_string())), ("2026-10-10".into(), Some("23:40:00".into())));
         let Op::Journal(b) = &p.ops[1] else { panic!() };
         assert!(b.date == today && b.time.is_some());
+    }
+
+    #[test]
+    fn filling_in_several_past_days() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 15).unwrap(); // Thursday
+        let mut run = Item::new("Run");
+        run.id = "r".into();
+        run.date = Some(today - Duration::days(30));
+        run.repeat = Some("daily".into());
+        // a list of days, plus a second entry for the same item: both count
+        let text = r#"{"items":[{"id":"r","done_dates":["2026-10-12","2026-10-13"]},{"id":"r","done":true,"done_date":"-1d"}],
+            "weight":[{"kg":82.4,"date":"last monday"},{"kg":82.1,"date":"-2d"}]}"#;
+        let p = plan(text, &[run], &[], &Settings::default(), &Library::default(), today);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert_eq!(p.ops[0].describe(), "~ Run · done Mon Oct 12, Tue Oct 13");
+        assert_eq!(p.ops[1].describe(), "~ Run · done Wed Oct 14");
+        let last = p.ops.iter().filter_map(|o| if let Op::Update(i, _) = o { Some(i) } else { None }).last().unwrap();
+        for d in [12, 13, 14] {
+            assert!(last.is_done_on(NaiveDate::from_ymd_opt(2026, 10, d).unwrap()), "Oct {d}");
+        }
+        assert!(!last.is_done_on(today));
+        let weights: Vec<String> = p.ops.iter().filter_map(|o| if let Op::LogWeight(w) = o { Some(w.date.to_string()) } else { None }).collect();
+        assert_eq!(weights, ["2026-10-12", "2026-10-13"]); // last monday, 2 days ago
     }
 }
