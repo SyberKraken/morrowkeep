@@ -83,6 +83,11 @@ pub struct Settings {
     pub always_on_top: bool,
     /// Order of the main tabs ("habits", "calendar", ...); empty = the default order.
     pub tab_order: Vec<String>,
+    /// Phone access (Settings > Phone): the web server for the phone app, its port, and the
+    /// paired phones.
+    pub phone_enabled: bool,
+    pub phone_port: u16,
+    pub phone_devices: Vec<crate::phone::PhoneDevice>,
     /// UI font: "inter" (default), "nunito", "segoe" or "egui".
     pub font: String,
     /// Theme file (stem) in the themes folder, e.g. "night-sky".
@@ -133,6 +138,9 @@ impl Default for Settings {
             close_to_tray: true,
             always_on_top: false,
             tab_order: Vec::new(),
+            phone_enabled: false,
+            phone_port: 8787,
+            phone_devices: Vec::new(),
             font: "inter".into(),
             theme: "night-sky".into(),
             reminders_enabled: true,

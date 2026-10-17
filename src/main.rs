@@ -11,6 +11,7 @@ mod import;
 mod model;
 mod notify;
 mod parse;
+mod phone;
 mod shortcut;
 mod store;
 mod tray;

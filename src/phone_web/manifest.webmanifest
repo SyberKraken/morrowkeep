@@ -1,0 +1,13 @@
+{
+  "name": "Morrowkeep",
+  "short_name": "Morrowkeep",
+  "description": "Log calories, weight, journal entries and tasks to Morrowkeep on your PC.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0e121e",
+  "theme_color": "#0e121e",
+  "icons": [
+    { "src": "/icon.png", "sizes": "256x256", "type": "image/png", "purpose": "any" }
+  ]
+}

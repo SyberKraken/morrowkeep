@@ -29,6 +29,8 @@ whisper-rs = { version = "0.14", optional = true }
 cpal = { version = "0.15", optional = true }
 egui_plot = "0.31"
 windows = { version = "0.62", features = ["Foundation", "Foundation_Collections", "Data_Xml_Dom", "UI_Notifications", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_Storage_EnhancedStorage"] }
+tiny_http = { version = "0.12", default-features = false }
+qrcode = { version = "0.14", default-features = false }
 
 [profile.release]
 lto = "thin"

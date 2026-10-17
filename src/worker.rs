@@ -33,6 +33,8 @@ pub fn spawn(shared: Arc<Mutex<Data>>, ui: UiHandle, jobs: Receiver<Job>) {
         let mut theme_seen = (String::new(), None);
         loop {
             let mut sync_requested = false;
+            // phone server follows the settings (also while only in the tray)
+            crate::phone::sync(&shared, &ui);
             match jobs.recv_timeout(Duration::from_secs(3)) {
                 Ok(Job::SyncNow) => sync_requested = true,
                 Err(RecvTimeoutError::Timeout) => {}

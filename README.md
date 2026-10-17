@@ -131,6 +131,34 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   context, leaving only the tray and a background worker at about 5–12 MB. Measured on Windows 11
   with an AMD GPU.
 
+## Phone app (through Tailscale)
+
+Morrowkeep can serve a small app for your phone: log weight, calories (your food library,
+Claude estimates or a number), journal entries (typed or recorded; the recording is
+transcribed by Whisper on your PC), tick off today's tasks and ask Claude, all from the phone.
+It's the same data as the desktop app, and it uses your desktop theme.
+
+It runs on your PC (a small web server inside Morrowkeep that only listens on `127.0.0.1`), and
+your phone reaches it privately through **Tailscale** (free for personal use). Nothing is put on
+the internet, no router ports are opened, and there's no cloud account besides Tailscale.
+
+Setup, once:
+
+1. On the PC, install Tailscale and sign in. In the Tailscale admin page under **DNS**, turn on
+   MagicDNS and **HTTPS certificates** (phones only allow the microphone and "install as app" on
+   https pages).
+2. In Morrowkeep, **Settings › Phone**: turn on phone access, press Save, then **Publish on
+   Tailscale**. It shows your phone address, like `https://my-pc.tail1234.ts.net/`.
+3. On the phone, install Tailscale, sign in with the same account and switch it on.
+4. **Settings › Phone › Pair a phone** shows a QR code: scan it with the phone's camera. The code
+   works once, for 10 minutes. The phone keeps a secret key (only its hash is stored on the PC);
+   remove a phone in the list to lock it out.
+5. Add it to your home screen: Safari → Share → **Add to Home Screen**, or Chrome → ⋮ →
+   **Install app**. Allow the microphone the first time you record.
+
+The PC needs to be on with Morrowkeep running (the tray is enough). Entries made while it can't
+be reached wait on the phone and are sent later, each with the day and time it was made.
+
 ## Build and run
 
 ```

@@ -36,10 +36,11 @@ pub enum Section {
     Input,
     Reminders,
     Google,
+    Phone,
 }
 
 impl Section {
-    const ALL: [Section; 6] = [Section::General, Section::Appearance, Section::Categories, Section::Input, Section::Reminders, Section::Google];
+    const ALL: [Section; 7] = [Section::General, Section::Appearance, Section::Categories, Section::Input, Section::Reminders, Section::Google, Section::Phone];
 
     fn label(self) -> &'static str {
         match self {
@@ -49,6 +50,7 @@ impl Section {
             Section::Input => "Input & voice",
             Section::Reminders => "Reminders",
             Section::Google => "Google Calendar",
+            Section::Phone => "Phone",
         }
     }
 
@@ -60,6 +62,7 @@ impl Section {
             Section::Input => "🎤",
             Section::Reminders => "🔔",
             Section::Google => "📅",
+            Section::Phone => "📱",
         }
     }
 }
@@ -81,6 +84,10 @@ pub struct SettingsPage {
     claude_test: Option<Receiver<Result<String, String>>>,
     claude_msg: Option<(String, bool)>,
     reminder_msg: Option<(String, bool)>,
+    /// Tailscale: this PC's name on the tailnet (or why not), and a running command.
+    ts_name: Option<Result<String, String>>,
+    ts_job: Option<Receiver<(Option<Result<String, String>>, Option<Result<String, String>>)>>,
+    ts_msg: Option<(String, bool)>,
     #[cfg(feature = "voice")]
     download: Option<(std::sync::Arc<std::sync::Mutex<f32>>, Receiver<Result<(), String>>)>,
 }
@@ -100,6 +107,9 @@ impl SettingsPage {
             claude_test: None,
             claude_msg: None,
             reminder_msg: None,
+            ts_name: None,
+            ts_job: None,
+            ts_msg: None,
             #[cfg(feature = "voice")]
             download: None,
         }
@@ -252,6 +262,7 @@ impl SettingsPage {
                 }
                 Section::Reminders => self.reminders(ui, data),
                 Section::Google => self.google(ui, data, &ctx),
+                Section::Phone => self.phone(ui, data),
             }
             ui.add_space(24.0);
         });
@@ -732,6 +743,196 @@ impl SettingsPage {
         }
         if let Some(t) = data.sync.last_sync {
             ui.label(RichText::new(format!("Last sync: {}", t.format("%Y-%m-%d %H:%M"))).weak().size(12.0));
+        }
+    }
+}
+
+impl SettingsPage {
+    /// Runs a Tailscale command (or just the name lookup) in the background.
+    fn tailscale_job(&mut self, ctx: &egui::Context, action: Option<bool>, port: u16) {
+        let (tx, rx) = mpsc::channel();
+        let c = ctx.clone();
+        std::thread::spawn(move || {
+            let msg = action.map(|publish| if publish { crate::phone::tailscale_publish(port) } else { crate::phone::tailscale_unpublish() });
+            let name = Some(crate::phone::tailscale_name());
+            let _ = tx.send((msg, name));
+            c.request_repaint();
+        });
+        self.ts_job = Some(rx);
+    }
+
+    fn phone(&mut self, ui: &mut Ui, data: &mut Data) {
+        let t = super::theme::th();
+        let ctx = ui.ctx().clone();
+        if let Some(rx) = &self.ts_job {
+            if let Ok((msg, name)) = rx.try_recv() {
+                if let Some(m) = msg {
+                    self.ts_msg = Some(match m {
+                        Ok(out) => (if out.is_empty() { "Done".into() } else { out }, true),
+                        Err(e) => (e, false),
+                    });
+                }
+                self.ts_name = name;
+                self.ts_job = None;
+            }
+        }
+        note(
+            ui,
+            "Use Morrowkeep from your phone: log weight, calories and journal entries (also by voice), tick off today's tasks and ask Claude. \
+             Your phone reaches this PC privately through Tailscale (free); nothing is put on the internet.",
+        );
+
+        subheading(ui, "1 · Phone access");
+        ui.checkbox(&mut self.draft.phone_enabled, "Allow phone access (a small web server inside Morrowkeep, only on this PC's own address)");
+        ui.horizontal(|ui| {
+            ui.label("Port");
+            ui.add(egui::DragValue::new(&mut self.draft.phone_port).range(1024..=65535));
+            if data.settings.phone_enabled {
+                let s = crate::phone::status();
+                let ok = crate::phone::is_running();
+                ui.label(RichText::new(if s.is_empty() { "starting…".into() } else { s }).color(if ok { ok_color() } else { err_color() }).size(12.5));
+            } else if self.draft.phone_enabled {
+                ui.label(RichText::new("press Save to start it").color(t.status.warning).size(12.5));
+            }
+        });
+
+        subheading(ui, "2 · Tailscale");
+        let port = data.settings.phone_port;
+        if crate::phone::tailscale_exe().is_none() {
+            note(ui, "Tailscale isn't installed on this PC. Install it, sign in, and in the Tailscale admin page (DNS) turn on MagicDNS and HTTPS certificates. Then install Tailscale on your phone with the same account.");
+            ui.horizontal(|ui| {
+                if ui.button("Download Tailscale for Windows").clicked() {
+                    let _ = open::that("https://tailscale.com/download/windows");
+                }
+                if ui.button("Open Tailscale DNS settings").clicked() {
+                    let _ = open::that("https://login.tailscale.com/admin/dns");
+                }
+                if ui.button("Check again").clicked() {
+                    self.ts_name = None;
+                }
+            });
+        } else {
+            if self.ts_name.is_none() && self.ts_job.is_none() {
+                self.tailscale_job(&ctx, None, port);
+            }
+            match &self.ts_name {
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Checking Tailscale…");
+                    });
+                }
+                Some(Ok(name)) => {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("● connected as").color(ok_color()));
+                        ui.label(RichText::new(name).monospace());
+                    });
+                }
+                Some(Err(e)) => {
+                    ui.label(RichText::new(e).color(err_color()));
+                }
+            }
+            ui.horizontal(|ui| {
+                let can = data.settings.phone_enabled && self.ts_job.is_none() && matches!(self.ts_name, Some(Ok(_)));
+                if ui.add_enabled(can, egui::Button::new(RichText::new("Publish on Tailscale").strong())).on_hover_text(format!("Runs: tailscale serve --bg http://127.0.0.1:{port}")).clicked() {
+                    self.tailscale_job(&ctx, Some(true), port);
+                }
+                if ui.add_enabled(self.ts_job.is_none(), egui::Button::new("Stop publishing")).clicked() {
+                    self.tailscale_job(&ctx, Some(false), port);
+                }
+                if ui.add_enabled(self.ts_job.is_none(), egui::Button::new("Refresh")).clicked() {
+                    self.tailscale_job(&ctx, None, port);
+                }
+                if ui.button("DNS / HTTPS settings").on_hover_text("MagicDNS and HTTPS certificates must be on").clicked() {
+                    let _ = open::that("https://login.tailscale.com/admin/dns");
+                }
+            });
+            if let Some((m, ok)) = &self.ts_msg {
+                ui.label(RichText::new(m).color(if *ok { ok_color() } else { err_color() }).size(12.5));
+            }
+            if let Some(Ok(name)) = &self.ts_name {
+                ui.horizontal(|ui| {
+                    ui.label("Phone address:");
+                    let url = format!("https://{name}/");
+                    ui.label(RichText::new(&url).monospace().color(t.widget.link));
+                    if ui.small_button("Copy").clicked() {
+                        ui.ctx().copy_text(url);
+                    }
+                });
+            }
+        }
+
+        subheading(ui, "3 · Pair a phone");
+        let running = crate::phone::is_running();
+        let base = match &self.ts_name {
+            Some(Ok(name)) => format!("https://{name}/"),
+            _ => format!("http://127.0.0.1:{port}/"),
+        };
+        match crate::phone::pair_code() {
+            Some((code, left)) => {
+                let url = format!("{base}#pair={code}");
+                ui.horizontal(|ui| {
+                    qr(ui, &url);
+                    ui.vertical(|ui| {
+                        ui.label("Scan this with your phone's camera (Tailscale on), or open the address below and type the code.");
+                        ui.label(RichText::new(&code).font(super::theme::bold(28.0)));
+                        ui.label(RichText::new(format!("works once · {}:{:02} left", left / 60, left % 60)).weak().size(12.5));
+                        ui.label(RichText::new(&url).monospace().size(12.0));
+                        if base.starts_with("http://127.0.0.1") {
+                            ui.label(RichText::new("This address only works on this PC (for trying it out). Publish on Tailscale for your phone.").color(t.status.warning).size(12.5));
+                        }
+                    });
+                });
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
+            None => {
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(running, egui::Button::new("Pair a phone")).clicked() {
+                        crate::phone::new_pair_code();
+                    }
+                    if !running {
+                        ui.label(RichText::new("turn on phone access first").weak().size(12.5));
+                    }
+                });
+            }
+        }
+
+        subheading(ui, "Paired phones");
+        if self.draft.phone_devices.is_empty() {
+            note(ui, "None yet.");
+        }
+        let mut remove = None;
+        for (i, dev) in self.draft.phone_devices.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&dev.name).strong());
+                let seen = crate::phone::last_seen(&dev.id).map(|d| format!(" · last used {}", d.format("%b %-d %H:%M"))).unwrap_or_default();
+                ui.label(RichText::new(format!("paired {}{seen}", dev.added.format("%b %-d, %Y"))).weak().size(12.5));
+                if ui.small_button("Remove").on_hover_text("It stops working right away after Save").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            self.draft.phone_devices.remove(i);
+        }
+    }
+}
+
+/// A QR code, drawn with the painter (dark modules on a light square, as scanners expect).
+fn qr(ui: &mut Ui, text: &str) {
+    let Ok(code) = qrcode::QrCode::new(text.as_bytes()) else { return };
+    let n = code.width();
+    let colors = code.to_colors();
+    let quiet = 4;
+    let cell = (200.0 / (n + 2 * quiet) as f32).floor().max(2.0);
+    let size = cell * (n + 2 * quiet) as f32;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 6.0, Color32::WHITE);
+    for (k, c) in colors.iter().enumerate() {
+        if *c == qrcode::Color::Dark {
+            let (x, y) = ((k % n + quiet) as f32, (k / n + quiet) as f32);
+            p.rect_filled(egui::Rect::from_min_size(rect.min + egui::vec2(x * cell, y * cell), egui::vec2(cell, cell)), 0.0, Color32::BLACK);
         }
     }
 }
