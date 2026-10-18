@@ -203,6 +203,9 @@ pub struct Workout {
     pub notes: String,
     #[serde(default)]
     pub items: Vec<Item>,
+    /// A task (item id) that gets ticked off for the day when this workout is finished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub builtin: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -376,6 +379,51 @@ pub struct WorkoutLog {
     pub sessions: Vec<Session>,
 }
 
+/// One day's sets of an exercise, from the log.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExerciseDay {
+    pub date: chrono::NaiveDate,
+    pub sets: Vec<SetDone>,
+}
+
+impl ExerciseDay {
+    pub fn top_kg(&self) -> Option<f32> {
+        self.sets.iter().filter_map(|s| s.kg).fold(None, |m, k| Some(m.map_or(k, |m: f32| m.max(k))))
+    }
+    pub fn top_reps(&self) -> Option<u32> {
+        self.sets.iter().filter_map(|s| s.reps).max()
+    }
+    /// "3 × 10 @ 12 kg", "2 × 40 s".
+    pub fn summary(&self) -> String {
+        let n = self.sets.len();
+        match (self.top_reps(), self.top_kg()) {
+            (Some(r), Some(k)) => format!("{n} × {r} @ {k} kg"),
+            (Some(r), None) => format!("{n} × {r} reps"),
+            _ => format!("{n} × {} s", self.sets.iter().map(|s| s.seconds).max().unwrap_or(0)),
+        }
+    }
+}
+
+impl WorkoutLog {
+    /// Every day an exercise was done, oldest first.
+    pub fn exercise_days(&self, exercise: &str) -> Vec<ExerciseDay> {
+        let mut days: Vec<ExerciseDay> = Vec::new();
+        let mut sessions: Vec<&Session> = self.sessions.iter().collect();
+        sessions.sort_by(|a, b| (a.date, &a.start).cmp(&(b.date, &b.start)));
+        for s in sessions {
+            let sets: Vec<SetDone> = s.sets.iter().filter(|x| x.exercise == exercise).cloned().collect();
+            if sets.is_empty() {
+                continue;
+            }
+            match days.last_mut() {
+                Some(d) if d.date == s.date => d.sets.extend(sets),
+                _ => days.push(ExerciseDay { date: s.date, sets }),
+            }
+        }
+        days
+    }
+}
+
 /// "28 min", "45 s".
 pub fn duration_label(secs: u32) -> String {
     if secs >= 60 {
@@ -460,5 +508,19 @@ mod tests {
         assert_eq!(steps[1], Step::Rest { seconds: 60, label: "Rest".into() });
         assert_eq!(steps[5], Step::Rest { seconds: 90, label: "Break".into() });
         assert_eq!(steps[6].duration(), Some(40));
+    }
+
+    #[test]
+    fn exercise_history_from_the_log() {
+        let d = |n| chrono::NaiveDate::from_ymd_opt(2026, 10, n).unwrap();
+        let set = |ex: &str, reps, kg| SetDone { exercise: ex.into(), name: ex.into(), set: 1, reps: Some(reps), seconds: 30, kg: Some(kg) };
+        let sess = |date, sets| Session { id: "x".into(), date, start: "18:00".into(), duration_s: 600, workout_id: "w".into(), workout: "W".into(), sets, completed: true };
+        let log = WorkoutLog { version: 1, sessions: vec![sess(d(12), vec![set("row", 10, 12.0), set("row", 8, 14.0), set("curl", 12, 8.0)]), sess(d(10), vec![set("row", 10, 10.0)])] };
+        let days = log.exercise_days("row");
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0].date, d(10)); // oldest first
+        assert_eq!(days[1].top_kg(), Some(14.0));
+        assert_eq!(days[1].summary(), "2 × 10 @ 14 kg");
+        assert!(log.exercise_days("plank").is_empty());
     }
 }

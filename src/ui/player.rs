@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 pub struct Player {
     workout_id: String,
+    /// Task to tick off when the workout is completed.
+    task: Option<String>,
     name: String,
     steps: Vec<Step>,
     idx: usize,
@@ -48,6 +50,7 @@ impl Player {
         let steps = w.steps(lib);
         let mut p = Player {
             workout_id: w.id.clone(),
+            task: w.task.clone(),
             name: w.name.clone(),
             steps,
             idx: 0,
@@ -150,6 +153,17 @@ impl Player {
         data.workout_log.sessions.push(session);
         data.save_workout_log();
         data.status = format!("Workout saved: {}", self.name);
+        // a finished workout ticks off its task for today
+        if completed {
+            if let Some(i) = self.task.as_ref().and_then(|id| data.item_index(id)) {
+                let today = Local::now().date_naive();
+                if !data.items[i].is_done_on(today) {
+                    data.items[i].toggle_done(today);
+                    data.save_items();
+                    data.status = format!("Workout saved · ✔ {}", data.items[i].title);
+                }
+            }
+        }
     }
 
     /// Draws the player. Returns false when it should close.

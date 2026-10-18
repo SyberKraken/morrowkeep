@@ -47,7 +47,7 @@ Tick the boxes as steps are finished, so work can resume from here.
 - [x] **3. Player** (done 2026-10-18: src/ui/player.rs; Step expansion + Session/WorkoutLog in src/workouts.rs; sessions already saved to workout_log.json at the end, so step 4 only needs the History UI, per-exercise last/best, progress chart and task linking): full-window view, big circle timer, timed steps auto-advance, rep-only
   sets wait for "Done set", rests between sets, beeps (moving on + last 3 s), pause /
   back / skip, adjust reps/kg of the set just done, next-up preview, summary at the end.
-- [ ] **4. History and progress**: save sessions, history list, per-exercise last/best on the
+- [x] **4. History and progress** (done 2026-10-18: History section, per-exercise last/best + progress plot on the info page, workout.task ticks a task off when finished): save sessions, history list, per-exercise last/best on the
   info page, progress chart, link a workout to a task (tick it off when finished).
 - [ ] **5. Claude**: "Fill in with Claude" for a new exercise; "Build with Claude" for a
   workout (uses only library exercises, reviewed before saving); library in Claude context;

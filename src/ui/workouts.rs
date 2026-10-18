@@ -5,6 +5,7 @@
 use super::theme;
 use crate::store::Data;
 use crate::workouts::{self, Exercise, Item, EQUIPMENT, KINDS, LEVELS, MUSCLES};
+use chrono::Datelike;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, Ui, Vec2};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -27,11 +28,13 @@ pub struct WorkoutsUi {
     add_search: String,
     /// The workout being done, full window.
     player: Option<super::player::Player>,
+    /// Selected session in History.
+    session: Option<String>,
 }
 
 impl Default for WorkoutsUi {
     fn default() -> Self {
-        WorkoutsUi { section: Section::Exercises, search: String::new(), equipment: Vec::new(), muscle: None, selected: None, editing: false, confirm_delete: false, workout: None, add_search: String::new(), player: None }
+        WorkoutsUi { section: Section::Exercises, search: String::new(), equipment: Vec::new(), muscle: None, selected: None, editing: false, confirm_delete: false, workout: None, add_search: String::new(), player: None, session: None }
     }
 }
 
@@ -61,7 +64,7 @@ impl WorkoutsUi {
                 match self.section {
                     Section::Exercises => self.exercise_page(ui, data),
                     Section::Workouts => self.workout_page(ui, data),
-                    Section::History => super::streaks::empty_state(ui, "History comes with the workout player", "Finished workouts will be listed here."),
+                    Section::History => self.history_page(ui, data),
                 }
             });
         });
@@ -81,8 +84,8 @@ impl WorkoutsUi {
         if self.section == Section::Workouts {
             return self.workouts_sidebar(ui, data);
         }
-        if self.section != Section::Exercises {
-            return;
+        if self.section == Section::History {
+            return self.history_sidebar(ui, data);
         }
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Search exercises…").desired_width(ui.available_width() - 70.0));
@@ -249,6 +252,8 @@ impl WorkoutsUi {
                 });
             });
         });
+        ui.add_space(8.0);
+        exercise_history(ui, data, &e.id);
         if delete {
             let removed = data.exercises.exercises.remove(i);
             if removed.builtin {
@@ -499,6 +504,15 @@ impl WorkoutsUi {
             return;
         };
         let lib = data.exercises.exercises.clone();
+        // tasks a workout can tick off: repeating ones, and dated ones from today on
+        let today = chrono::Local::now().date_naive();
+        let mut task_titles: Vec<(String, String)> = data
+            .items
+            .iter()
+            .filter(|it| it.repeat.is_some() || (!it.done && it.date.is_some_and(|d| d >= today)))
+            .map(|it| (it.id.clone(), if it.repeat.is_some() { format!("{} (repeating)", it.title) } else { it.title.clone() }))
+            .collect();
+        task_titles.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
         let mut changed = false;
         let mut delete = false;
         let mut duplicate = false;
@@ -543,6 +557,16 @@ impl WorkoutsUi {
                 .color(t.text.muted),
             );
             changed |= ui.add(egui::TextEdit::multiline(&mut w.notes).desired_rows(1).desired_width(f32::INFINITY).hint_text("notes (optional)")).changed();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("When finished, tick off").color(t.text.muted));
+                let current = w.task.as_ref().and_then(|id| task_titles.iter().find(|(i, _)| i == id)).map_or("no task".to_string(), |(_, title)| title.clone());
+                egui::ComboBox::from_id_salt("wk_task").selected_text(current).width(260.0).show_ui(ui, |ui| {
+                    changed |= ui.selectable_value(&mut w.task, None, "no task").changed();
+                    for (id, title) in &task_titles {
+                        changed |= ui.selectable_value(&mut w.task, Some(id.clone()), title).changed();
+                    }
+                });
+            });
             ui.add_space(6.0);
             let n = w.items.len();
             for (k, item) in w.items.iter_mut().enumerate() {
@@ -668,5 +692,155 @@ impl WorkoutsUi {
 impl WorkoutsUi {
     fn start_player(&mut self, data: &mut Data, wi: usize) {
         self.player = Some(super::player::Player::new(&data.workouts.workouts[wi], &data.exercises.exercises));
+    }
+}
+
+// ---------------------------------------------------------------- history (step 4)
+
+/// "Your history" for one exercise: last time, best, and progress over time.
+fn exercise_history(ui: &mut Ui, data: &Data, exercise: &str) {
+    let t = theme::th();
+    let days = data.workout_log.exercise_days(exercise);
+    theme::card().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new("YOUR HISTORY").size(12.0).color(t.text.muted));
+        let Some(last) = days.last() else {
+            ui.label(RichText::new("Not done yet. Sets you do in a workout show up here.").color(t.text.muted));
+            return;
+        };
+        let best_kg = days.iter().filter_map(|d| d.top_kg()).fold(None, |m: Option<f32>, k| Some(m.map_or(k, |m| m.max(k))));
+        let best_reps = days.iter().filter_map(|d| d.top_reps()).max();
+        let mut line = format!("Last: {} · {}", last.date.format("%a %b %-d"), last.summary());
+        match (best_kg, best_reps) {
+            (Some(k), _) => line += &format!("   ·   Best: {k} kg"),
+            (None, Some(r)) => line += &format!("   ·   Best: {r} reps"),
+            _ => {}
+        }
+        line += &format!("   ·   {} time{}", days.len(), if days.len() == 1 { "" } else { "s" });
+        ui.label(line);
+        // progress: top kg per day (or top reps for bodyweight work)
+        let by_kg = best_kg.is_some();
+        let pts: Vec<[f64; 2]> = days
+            .iter()
+            .filter_map(|d| {
+                let y = if by_kg { d.top_kg().map(|k| k as f64) } else { d.top_reps().map(|r| r as f64) }?;
+                Some([d.date.num_days_from_ce() as f64, y])
+            })
+            .collect();
+        if pts.len() >= 2 {
+            let unit = if by_kg { "kg" } else { "reps" };
+            egui_plot::Plot::new(("ex_progress", exercise))
+                .height(120.0)
+                .allow_zoom(false)
+                .allow_drag(false)
+                .allow_scroll(false)
+                .show_axes([false, true])
+                .y_axis_formatter(move |m, _| format!("{:.0} {unit}", m.value))
+                .label_formatter(|_, p| chrono::NaiveDate::from_num_days_from_ce_opt(p.x.round() as i32).map(|d| format!("{}\n{:.1}", d.format("%b %-d"), p.y)).unwrap_or_default())
+                .show(ui, |plot| {
+                    plot.line(egui_plot::Line::new(egui_plot::PlotPoints::new(pts.clone())).color(workout_color()).width(2.0));
+                    plot.points(egui_plot::Points::new(egui_plot::PlotPoints::new(pts)).color(workout_color()).radius(3.5));
+                });
+        }
+    });
+}
+
+impl WorkoutsUi {
+    fn history_sidebar(&mut self, ui: &mut Ui, data: &Data) {
+        let t = theme::th();
+        let mut sessions: Vec<&workouts::Session> = data.workout_log.sessions.iter().collect();
+        sessions.sort_by(|a, b| (b.date, &b.start).cmp(&(a.date, &a.start)));
+        if sessions.is_empty() {
+            ui.label(RichText::new("No workouts done yet.").color(t.text.muted));
+            return;
+        }
+        let mut pick = None;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                for s in sessions {
+                    let sel = self.session.as_deref() == Some(s.id.as_str());
+                    let label = format!("{} · {} · {}", s.date.format("%a %b %-d"), s.workout, workouts::duration_label(s.duration_s));
+                    let r = ui.add(egui::SelectableLabel::new(sel, label));
+                    if r.clicked() {
+                        pick = Some(s.id.clone());
+                    }
+                }
+            });
+        });
+        if let Some(id) = pick {
+            self.session = Some(id);
+            self.confirm_delete = false;
+        }
+    }
+
+    fn history_page(&mut self, ui: &mut Ui, data: &mut Data) {
+        let t = theme::th();
+        let Some(i) = self.session.as_ref().and_then(|id| data.workout_log.sessions.iter().position(|s| s.id == *id)) else {
+            let n = data.workout_log.sessions.len();
+            let week = data.workout_log.sessions.iter().filter(|s| s.date > chrono::Local::now().date_naive() - chrono::Duration::days(7)).count();
+            ui.label(RichText::new("Workout history").font(theme::bold(22.0)));
+            ui.label(RichText::new(format!("{n} workout{} in total · {week} in the last 7 days. Pick one on the left for its sets.", if n == 1 { "" } else { "s" })).color(t.text.muted));
+            return;
+        };
+        let s = data.workout_log.sessions[i].clone();
+        let mut delete = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(&s.workout).font(theme::bold(22.0)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.confirm_delete {
+                    if ui.small_button("No").clicked() {
+                        self.confirm_delete = false;
+                    }
+                    if ui.small_button("Yes, delete").clicked() {
+                        delete = true;
+                    }
+                    ui.label(RichText::new("Delete this session?").color(t.status.warning));
+                } else if ui.small_button("🗑").on_hover_text("Delete").clicked() {
+                    self.confirm_delete = true;
+                }
+            });
+        });
+        let volume: f32 = s.sets.iter().map(|x| x.reps.unwrap_or(0) as f32 * x.kg.unwrap_or(0.0)).sum();
+        let mut line = format!("{} at {} · {} · {} sets", s.date.format("%A %b %-d"), s.start, workouts::duration_label(s.duration_s), s.sets.len());
+        if volume > 0.0 {
+            line += &format!(" · {volume:.0} kg lifted");
+        }
+        if !s.completed {
+            line += " · ended early";
+        }
+        ui.label(RichText::new(line).color(t.text.muted));
+        ui.add_space(8.0);
+        // sets grouped by exercise, in order
+        let mut groups: Vec<(String, Vec<&workouts::SetDone>)> = Vec::new();
+        for x in &s.sets {
+            match groups.last_mut() {
+                Some((ex, v)) if *ex == x.exercise => v.push(x),
+                _ => groups.push((x.exercise.clone(), vec![x])),
+            }
+        }
+        for (_, sets) in groups {
+            theme::card().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(&sets[0].name).strong());
+                for x in sets {
+                    let mut l = format!("set {}", x.set);
+                    if let Some(r) = x.reps {
+                        l += &format!(" · {r} reps");
+                    }
+                    if let Some(k) = x.kg {
+                        l += &format!(" · {k} kg");
+                    }
+                    l += &format!(" · {}", workouts::duration_label(x.seconds));
+                    ui.label(RichText::new(l).color(t.text.muted));
+                }
+            });
+            ui.add_space(4.0);
+        }
+        if delete {
+            data.workout_log.sessions.remove(i);
+            data.save_workout_log();
+            self.session = None;
+            self.confirm_delete = false;
+        }
     }
 }
