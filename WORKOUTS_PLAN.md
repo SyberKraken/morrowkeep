@@ -41,7 +41,7 @@ Tick the boxes as steps are finished, so work can resume from here.
   tests), Workouts tab with Exercises / Workouts / History switch, list with search +
   equipment and muscle filters, info page (steps, form, mistakes, equipment, muscles,
   level, easier/harder, muscle map), editor and "+ New exercise".
-- [ ] **2. Workouts**: builder (exercise items with sets/reps/seconds/kg/rest, break items,
+- [x] **2. Workouts** (done 2026-10-18: Item/Workout model + 5 starters in src/workouts_starter.json, builder in src/ui/workouts.rs; Start button is a stub until step 3): builder (exercise items with sets/reps/seconds/kg/rest, break items,
   reorder up/down or drag, remove), duration + equipment summary, starter workouts
   (full body, upper, lower, core, 10-min quick).
 - [ ] **3. Player**: full-window view, big circle timer, timed steps auto-advance, rep-only

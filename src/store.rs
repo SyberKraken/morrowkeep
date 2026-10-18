@@ -19,6 +19,7 @@ pub struct Paths {
     pub journal: PathBuf,
     pub foods: PathBuf,
     pub exercises: PathBuf,
+    pub workouts: PathBuf,
     /// Journal voice recordings (WAV).
     pub journal_audio: PathBuf,
     pub settings: PathBuf,
@@ -46,6 +47,7 @@ impl Paths {
             journal: root.join("journal.json"),
             foods: root.join("foods.json"),
             exercises: root.join("exercises.json"),
+            workouts: root.join("workouts.json"),
             journal_audio: root.join("journal-audio"),
             settings: root.join("settings.json"),
             body: root.join("body.json"),
@@ -230,6 +232,8 @@ pub struct Data {
     pub foods: crate::foods::Library,
     /// Exercise library (built-ins plus your own).
     pub exercises: crate::workouts::ExerciseFile,
+    /// Saved workouts (starter ones plus your own).
+    pub workouts: crate::workouts::WorkoutFile,
     /// Journal entries, sorted by date and time.
     pub journal: Vec<crate::journal::JournalEntry>,
     pub settings: Settings,
@@ -251,6 +255,7 @@ pub struct Data {
     journal_mtime: Option<SystemTime>,
     foods_mtime: Option<SystemTime>,
     exercises_mtime: Option<SystemTime>,
+    workouts_mtime: Option<SystemTime>,
 }
 
 impl Data {
@@ -293,6 +298,7 @@ impl Data {
             journal: Vec::new(),
             foods: Default::default(),
             exercises: Default::default(),
+            workouts: Default::default(),
             settings,
             body,
             body_error,
@@ -307,6 +313,7 @@ impl Data {
             journal_mtime: None,
             foods_mtime: None,
             exercises_mtime: None,
+            workouts_mtime: None,
         };
         if !data.paths.settings.exists() {
             data.save_settings();
@@ -340,6 +347,20 @@ impl Data {
                 }
             }
             Err(e) => errors.push(format!("exercises.json could not be read: {e}")),
+        }
+        self.workouts_mtime = mtime(&self.paths.workouts);
+        match read_json::<crate::workouts::WorkoutFile>(&self.paths.workouts) {
+            Ok(f) => {
+                self.workouts = f.unwrap_or_default();
+                let removed = self.workouts.removed.clone();
+                if crate::workouts::merge_starters(&mut self.workouts.workouts, &removed) && errors.is_empty() {
+                    self.workouts.version = 1;
+                    if write_json(&self.paths.workouts, &self.workouts).is_ok() {
+                        self.workouts_mtime = mtime(&self.paths.workouts);
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("workouts.json could not be read: {e}")),
         }
         match read_json::<crate::foods::Library>(&self.paths.foods) {
             Ok(f) => self.foods = f.unwrap_or_default(),
@@ -387,6 +408,7 @@ impl Data {
             || changed(&self.paths.journal, self.journal_mtime)
             || changed(&self.paths.foods, self.foods_mtime)
             || changed(&self.paths.exercises, self.exercises_mtime)
+            || changed(&self.paths.workouts, self.workouts_mtime)
     }
 
     pub fn save_journal(&mut self) {
@@ -409,6 +431,17 @@ impl Data {
         match write_json(&self.paths.exercises, &self.exercises) {
             Ok(()) => self.exercises_mtime = mtime(&self.paths.exercises),
             Err(e) => self.status = format!("Saving exercises failed: {e}"),
+        }
+    }
+
+    pub fn save_workouts(&mut self) {
+        if self.load_error.is_some() {
+            return;
+        }
+        self.workouts.version = 1;
+        match write_json(&self.paths.workouts, &self.workouts) {
+            Ok(()) => self.workouts_mtime = mtime(&self.paths.workouts),
+            Err(e) => self.status = format!("Saving workouts failed: {e}"),
         }
     }
 
@@ -652,7 +685,7 @@ impl Data {
     /// Copies items.json, calories.json and weight.json to backups/<name>-YYYY-MM-DD.json once a day,
     /// keeping two weeks of each.
     fn daily_backup(&self) {
-        for (prefix, file) in [("items", &self.paths.items), ("calories", &self.paths.calories), ("weight", &self.paths.weight), ("journal", &self.paths.journal), ("foods", &self.paths.foods), ("exercises", &self.paths.exercises)] {
+        for (prefix, file) in [("items", &self.paths.items), ("calories", &self.paths.calories), ("weight", &self.paths.weight), ("journal", &self.paths.journal), ("foods", &self.paths.foods), ("exercises", &self.paths.exercises), ("workouts", &self.paths.workouts)] {
             if !file.exists() {
                 continue;
             }
