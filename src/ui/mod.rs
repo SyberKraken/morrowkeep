@@ -11,6 +11,7 @@ mod journal;
 mod palettes;
 mod settings;
 mod views;
+mod workouts;
 
 use crate::model::{Item, Repeat};
 use crate::{claude, import};
@@ -32,6 +33,7 @@ enum View {
     Charts,
     Body,
     Foods,
+    Workouts,
     Journal,
     Settings,
 }
@@ -137,6 +139,7 @@ pub struct App {
     body_ui: body::BodyUi,
     journal: journal::JournalUi,
     foods_ui: foods::FoodsUi,
+    workouts_ui: workouts::WorkoutsUi,
     board: board::BoardState,
     /// Claude's answer waiting for Apply / Discard: (what was asked, import JSON).
     claude_reply: Option<(String, String)>,
@@ -185,6 +188,7 @@ impl App {
             body_ui: body::BodyUi::default(),
             journal: journal::JournalUi::default(),
             foods_ui: foods::FoodsUi::default(),
+            workouts_ui: workouts::WorkoutsUi::default(),
             board: board::BoardState::default(),
             claude_reply: None,
             claude_error: None,
@@ -338,7 +342,7 @@ impl App {
     /// Day that quick-add uses when the text has no date.
     fn default_day(&self) -> NaiveDate {
         match self.view {
-            View::Today | View::Charts | View::Body | View::Foods | View::Journal | View::Settings => Local::now().date_naive(),
+            View::Today | View::Charts | View::Body | View::Foods | View::Workouts | View::Journal | View::Settings => Local::now().date_naive(),
             View::Calendar => self.selected,
         }
     }
@@ -887,6 +891,7 @@ impl eframe::App for App {
             }
             View::Journal => self.journal.page(ctx, &mut data),
             View::Foods => self.foods_ui.page(ctx, &mut data),
+            View::Workouts => self.workouts_ui.page(ctx, &mut data),
             View::Settings => {
                 let page = self.settings.get_or_insert_with(|| settings::SettingsPage::open(&data));
                 egui::SidePanel::left("settings_nav").resizable(false).exact_width(210.0).show(ctx, |ui| page.nav(ui, &data));
@@ -979,7 +984,7 @@ fn logo_mark(ui: &mut egui::Ui) {
 
 impl View {
     /// The main tabs (Settings has its own button), in their default order.
-    const TABS: [View; 6] = [View::Today, View::Calendar, View::Charts, View::Body, View::Foods, View::Journal];
+    const TABS: [View; 7] = [View::Today, View::Calendar, View::Charts, View::Body, View::Foods, View::Workouts, View::Journal];
 
     fn key(self) -> &'static str {
         match self {
@@ -988,6 +993,7 @@ impl View {
             View::Charts => "charts",
             View::Body => "body",
             View::Foods => "foods",
+            View::Workouts => "workouts",
             View::Journal => "journal",
             View::Settings => "settings",
         }
@@ -1000,6 +1006,7 @@ impl View {
             View::Charts => ("📈", "Charts"),
             View::Body => ("⚖", "Body"),
             View::Foods => ("🍴", "Foods"),
+            View::Workouts => ("💪", "Workouts"),
             View::Journal => ("📖", "Journal"),
             View::Settings => ("⚙", "Settings"),
         }

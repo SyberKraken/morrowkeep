@@ -275,6 +275,12 @@ pub struct DataColors {
     /// Journal: its star, entry markers and accents.
     #[serde(with = "hex")]
     pub journal: Color32,
+    /// Workouts: exercise tags, the muscle map and the player's timer ring.
+    #[serde(with = "hex")]
+    pub workout: Color32,
+    /// Rests and breaks in the workout player.
+    #[serde(with = "hex")]
+    pub rest: Color32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -352,6 +358,8 @@ impl Default for DataColors {
             goal: rgb(80, 200, 160),
             trend: rgb(150, 190, 255),
             journal: rgb(226, 132, 196),
+            workout: rgb(46, 175, 120),
+            rest: rgb(100, 150, 230),
         }
     }
 }
@@ -456,6 +464,8 @@ fn daylight() -> Theme {
             goal: rgb(20, 150, 110),
             trend: rgb(20, 60, 150),
             journal: rgb(178, 62, 140),
+            workout: rgb(25, 140, 90),
+            rest: rgb(40, 100, 200),
         },
         sky: Sky { star: Color32::from_rgba_unmultiplied(90, 105, 150, 90), density: 0.6 },
         shape: Shape::default(),

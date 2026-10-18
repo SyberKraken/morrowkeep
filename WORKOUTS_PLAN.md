@@ -37,7 +37,7 @@ Tick the boxes as steps are finished, so work can resume from here.
 
 ## Steps
 
-- [ ] **1. Exercise library**: `src/workouts.rs` (model, ~45 built-ins, load/save, filters,
+- [x] **1. Exercise library** (done 2026-10-18: 47 built-ins in src/workouts_builtin.json, src/workouts.rs, src/ui/workouts.rs): `src/workouts.rs` (model, ~45 built-ins, load/save, filters,
   tests), Workouts tab with Exercises / Workouts / History switch, list with search +
   equipment and muscle filters, info page (steps, form, mistakes, equipment, muscles,
   level, easier/harder, muscle map), editor and "+ New exercise".

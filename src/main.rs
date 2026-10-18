@@ -20,6 +20,7 @@ mod ui;
 #[cfg(feature = "voice")]
 mod voice;
 mod worker;
+mod workouts;
 
 use eframe::egui;
 use std::sync::{mpsc, Arc, Mutex};
