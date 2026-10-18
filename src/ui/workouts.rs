@@ -1,6 +1,6 @@
-//! Workouts tab. Step 1 of WORKOUTS_PLAN.md: the exercise library (list with search and
-//! equipment/muscle filters, info page with a muscle map, editor). Workouts, the player and
-//! history come in the next steps.
+//! Workouts tab: the exercise library (list with search and equipment/muscle filters, info
+//! page with a muscle map, editor), the workout builder, history, and Claude fill-in/build.
+//! The player is in `player.rs`.
 
 use super::theme;
 use crate::store::Data;

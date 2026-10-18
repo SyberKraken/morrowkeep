@@ -1,5 +1,5 @@
 //! Workouts: an exercise library (dumbbells, bodyweight, flat bench) kept as readable JSON so
-//! exports and Claude know what each exercise does. See WORKOUTS_PLAN.md for the whole plan.
+//! exports and Claude know what each exercise does.
 
 use serde::{Deserialize, Serialize};
 
