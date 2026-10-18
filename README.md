@@ -70,8 +70,9 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   the target date, the planned path, and where your recent pace leads (dotted). When the
   target date is within one more period, the charts extend to it.
 - **Reminders.** Windows notifications, also while Morrowkeep is in the tray: unfinished "anytime"
-  items for today, no calories logged after 18:00, no weight logged after 10:00, and nothing in
-  the journal after 21:00. At most one
+  items for today, no calories logged after 18:00, no weight logged after 10:00, nothing in
+  the journal after 21:00, and **starting soon** for tasks with a time (15 minutes before).
+  They can also go to your phone (see [Phone app](#phone-app-through-tailscale)). At most one
   every 60 minutes, with quiet hours (22:00–08:00).
   - Calorie, weight and journal reminders have **input boxes**, so you can log right from the
     notification. Type a number for kcal, or a food description to have Morrowkeep open and
@@ -158,6 +159,19 @@ Setup, once:
 
 The PC needs to be on with Morrowkeep running (the tray is enough). Entries made while it can't
 be reached wait on the phone and are sent later, each with the day and time it was made.
+
+### Reminders on the phone
+
+Tap the 🔕 bell in the phone app and allow notifications (on iPhone: iOS 16.4+, opened from
+the Home Screen icon). Morrowkeep then sends its reminders to the phone through Apple's or
+Google's push service, encrypted for your phone, signed with a key that only exists on your
+PC. They arrive even when Tailscale is off on the phone; tapping one opens the right screen
+(Android also shows **Log** and **Snooze 2h**, and snoozing there snoozes the PC too).
+
+Where reminders go is set in **Settings › Reminders › Deliver to**: by default your phone when
+you haven't used the keyboard or mouse for 10 minutes, otherwise this PC. The **PC only**
+checkbox in the top bar keeps everything on the PC for now. Phones can't show text boxes in
+notifications, so typing a value is one tap away in the app.
 
 ## Build and run
 

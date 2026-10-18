@@ -12,6 +12,7 @@ mod model;
 mod notify;
 mod parse;
 mod phone;
+mod push;
 mod shortcut;
 mod store;
 mod tray;

@@ -145,6 +145,7 @@ async function pair(code) {
     if (!r.ok) throw new Error(body.error || "Pairing failed");
     S.token = body.token;
     localStorage.setItem("mk_token", S.token);
+    shareToken();
     history.replaceState(null, "", "/");
     toast("Paired. Add Morrowkeep to your home screen to open it like an app.", 5000);
     await refresh();
@@ -168,8 +169,78 @@ function renderPair() {
 
 function headerHtml() {
   const q = queue().length;
+  const on = S.state?.notifications;
   return `<header><span class="brand">Morrowkeep</span><span class="muted">${esc(S.state?.date_label || "")}
-    ${q ? `<span id="queue"> · ${q} waiting</span>` : ""}${S.offline ? ` · <span style="color:var(--warning)">PC offline</span>` : ""}</span></header>`;
+    ${q ? `<span id="queue"> · ${q} waiting</span>` : ""}${S.offline ? ` · <span style="color:var(--warning)">PC offline</span>` : ""}
+    <button class="small" data-act="bell" aria-label="Notifications" style="margin-left:6px;${on ? "" : "opacity:.7"}">${on ? "🔔" : "🔕"}</button></span></header>
+    ${S.bellOpen ? notifPanel() : ""}`;
+}
+
+// ---------------------------------------------------------------- notifications
+
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+
+function notifPanel() {
+  const on = S.state?.notifications;
+  let body;
+  if (!pushSupported()) {
+    body = isIOS() && !standalone()
+      ? `<p>On iPhone, notifications work when Morrowkeep is opened from its Home Screen icon (iOS 16.4 or newer). Add it with Share → Add to Home Screen, then open it from there.</p>`
+      : `<p>This browser can't show notifications from web apps.</p>`;
+  } else if (Notification.permission === "denied") {
+    body = `<p>Notifications are blocked for Morrowkeep. Allow them in your phone's settings (or the browser's site settings), then come back here.</p>`;
+  } else if (on) {
+    body = `<p>Notifications are on. Reminders come here when you're away from your PC (or as set in Settings › Reminders on the PC).</p>
+      <div class="row"><button class="grow" data-act="pushtest">Send test</button><button class="grow" data-act="pushoff">Turn off</button></div>`;
+  } else {
+    body = `<p>Get Morrowkeep's reminders on this phone: calories, weight, journal, tasks left today, and tasks starting soon.</p>
+      <button class="primary block" data-act="pushon">Turn on notifications</button>`;
+  }
+  return `<div class="card"><h3>Notifications</h3>${body}</div>`;
+}
+
+function b64ToBytes(s) {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+async function pushOn() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Notifications weren't allowed", 4000); return rerender(); }
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await api("/api/push/key");
+    let sub = await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+    await post("/api/push/subscribe", sub.toJSON());
+    toast("Notifications on");
+    await refresh();
+  } catch (e) {
+    toast("Couldn't turn on notifications: " + e.message, 5000);
+  }
+  rerender();
+}
+
+async function pushOff() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+    await post("/api/push/unsubscribe", {});
+    toast("Notifications off");
+    await refresh();
+  } catch (e) { toast(e.message, 4000); }
+  rerender();
+}
+
+/// The service worker needs the key too (to snooze from a notification while the app is closed).
+function shareToken() {
+  if (!S.token || !("caches" in window)) return;
+  caches.open("mk-auth").then((c) => c.put("/__token", new Response(S.token))).catch(() => {});
 }
 
 function starsHtml(st) {
@@ -627,6 +698,12 @@ document.addEventListener("click", async (e) => {
       Object.assign(S.ask, { job: null, reply: null, error: "", food: false });
       return rerender();
     case "askclear": Object.assign(S.ask, { error: "", job: null, food: false }); return rerender();
+    case "bell": S.bellOpen = !S.bellOpen; return rerender();
+    case "pushon": return pushOn();
+    case "pushoff": return pushOff();
+    case "pushtest":
+      try { const r = await post("/api/push/test", {}); toast(r.message || "Sent"); } catch (err) { toast(err.message, 4000); }
+      return;
     case "recstart": return startRec(el.dataset.target);
     case "recstop": return stopRec();
     case "retryaudio": return uploadAudio();
@@ -642,6 +719,14 @@ document.addEventListener("click", async (e) => {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   const m = location.hash.match(/pair=([A-Za-z0-9]+)/);
   if (m) return pair(m[1]);
+  // opened from a notification: go to the screen it's about
+  const go = new URLSearchParams(location.search).get("go");
+  if (go && ["today", "food", "journal", "ask"].includes(go)) {
+    S.tab = go;
+    localStorage.setItem("mk_tab", go);
+    history.replaceState(null, "", "/");
+  }
+  shareToken();
   render();
   if (S.token) { await refresh(); flushQueue(); }
 })();

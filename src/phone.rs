@@ -37,6 +37,9 @@ pub struct PhoneDevice {
     pub name: String,
     pub token_sha256: String,
     pub added: NaiveDate,
+    /// Where this phone receives notifications, once turned on in its app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<crate::push::Subscription>,
 }
 
 struct Running {
@@ -258,9 +261,9 @@ fn handle(mut rq: Request, shared: &Arc<Mutex<Data>>, ui: &UiHandle) {
     let Some(device) = device else {
         return respond_json(rq, 401, &json!({"error": "This phone isn't paired (or was removed). Pair it again from Settings > Phone on your PC."}));
     };
-    LAST_SEEN.lock().unwrap().get_or_insert_with(HashMap::new).insert(device, Local::now());
+    LAST_SEEN.lock().unwrap().get_or_insert_with(HashMap::new).insert(device.clone(), Local::now());
     let q = query(&url);
-    let result = api(&method, &path, &q, &json_body, body, shared, ui);
+    let result = api(&method, &path, &q, &json_body, body, shared, ui, &device);
     match result {
         Ok(v) => respond_json(rq, 200, &v),
         Err((code, msg)) => respond_json(rq, code, &json!({"error": msg})),
@@ -277,7 +280,7 @@ fn pair(shared: &Arc<Mutex<Data>>, body: &Value) -> (u16, Value) {
     let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     let name = body["name"].as_str().map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Phone").chars().take(40).collect::<String>();
     let mut d = shared.lock().unwrap();
-    d.settings.phone_devices.push(PhoneDevice { id: uuid::Uuid::new_v4().to_string(), name: name.clone(), token_sha256: sha(&token), added: Local::now().date_naive() });
+    d.settings.phone_devices.push(PhoneDevice { id: uuid::Uuid::new_v4().to_string(), name: name.clone(), token_sha256: sha(&token), added: Local::now().date_naive(), push: None });
     d.save_settings();
     d.status = format!("Phone paired: {name}");
     (200, json!({"token": token, "name": name}))
@@ -302,7 +305,8 @@ fn time_of(v: &Value, q: &HashMap<String, String>) -> Option<NaiveTime> {
     v["time"].as_str().or(q.get("time").map(String::as_str)).and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").ok())
 }
 
-fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body: Vec<u8>, shared: &Arc<Mutex<Data>>, ui: &UiHandle) -> ApiResult {
+#[allow(clippy::too_many_arguments)]
+fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body: Vec<u8>, shared: &Arc<Mutex<Data>>, ui: &UiHandle, device: &str) -> ApiResult {
     let today = Local::now().date_naive();
     let done = |d: &mut Data, msg: String| {
         d.status = format!("Phone: {msg}");
@@ -310,7 +314,51 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
         Ok(json!({"ok": true, "message": msg}))
     };
     match (method, path) {
-        (Method::Get, "/api/state") => Ok(state(&shared.lock().unwrap())),
+        (Method::Get, "/api/state") => Ok(state(&shared.lock().unwrap(), device)),
+
+        // ---- notifications
+        (Method::Get, "/api/push/key") => {
+            let mut d = shared.lock().unwrap();
+            if d.settings.push_key.is_empty() {
+                d.settings.push_key = crate::push::new_key();
+                d.save_settings();
+            }
+            let key = crate::push::public_key(&d.settings.push_key).map_err(|e| (500, e))?;
+            Ok(json!({"key": key}))
+        }
+        (Method::Post, "/api/push/subscribe") => {
+            let s = |k: &str| v.pointer(k).and_then(Value::as_str).map(str::to_string).filter(|s| !s.is_empty());
+            let (Some(endpoint), Some(p256dh), Some(auth)) = (s("/endpoint"), s("/keys/p256dh"), s("/keys/auth")) else {
+                return Err(bad("The phone didn't send a complete subscription"));
+            };
+            if !endpoint.starts_with("https://") {
+                return Err(bad("Unexpected push address"));
+            }
+            let mut d = shared.lock().unwrap();
+            if let Some(dev) = d.settings.phone_devices.iter_mut().find(|p| p.id == device) {
+                dev.push = Some(crate::push::Subscription { endpoint, p256dh, auth });
+            }
+            d.save_settings();
+            done(&mut d, "notifications turned on".into())
+        }
+        (Method::Post, "/api/push/unsubscribe") => {
+            let mut d = shared.lock().unwrap();
+            if let Some(dev) = d.settings.phone_devices.iter_mut().find(|p| p.id == device) {
+                dev.push = None;
+            }
+            d.save_settings();
+            done(&mut d, "notifications turned off".into())
+        }
+        (Method::Post, "/api/push/test") => {
+            send_test(shared, device)?;
+            Ok(json!({"ok": true, "message": "Test notification sent"}))
+        }
+        (Method::Post, "/api/snooze") => {
+            let hours = v["hours"].as_f64().unwrap_or(2.0).clamp(0.25, 24.0);
+            crate::notify::snooze(hours);
+            let mut d = shared.lock().unwrap();
+            done(&mut d, format!("reminders snoozed for {hours} h"))
+        }
 
         (Method::Post, "/api/weight") => {
             let kg = v["kg"].as_f64().filter(|k| (20.0..=400.0).contains(k)).ok_or_else(|| bad("Enter a weight between 20 and 400 kg"))? as f32;
@@ -547,7 +595,67 @@ fn hex(c: eframe::egui::Color32) -> String {
 }
 
 /// Everything the phone's screens show, in one request.
-fn state(d: &Data) -> Value {
+/// Sends a test notification to one phone (in the background).
+pub fn send_test(shared: &Arc<Mutex<Data>>, device: &str) -> Result<(), (u16, String)> {
+    let (key, sub) = {
+        let d = shared.lock().unwrap();
+        let sub = d.settings.phone_devices.iter().find(|p| p.id == device).and_then(|p| p.push.clone());
+        (d.settings.push_key.clone(), sub)
+    };
+    let sub = sub.ok_or_else(|| bad("Notifications aren't on for this phone yet"))?;
+    let payload = json!({"title": "Morrowkeep", "body": "Test notification. Reminders will arrive like this.", "tag": "test", "go": "today"});
+    let shared = shared.clone();
+    let device = device.to_string();
+    std::thread::spawn(move || {
+        let r = crate::push::send(&key, &sub, &payload);
+        let mut d = shared.lock().unwrap();
+        d.status = match r {
+            Ok(()) => "Test notification sent to your phone".into(),
+            Err(crate::push::SendError::Gone) => {
+                forget_push(&mut d, &device);
+                "That phone's notifications were turned off; turn them on again in its app".into()
+            }
+            Err(crate::push::SendError::Other(e)) => format!("Couldn't send the test notification: {e}"),
+        };
+    });
+    Ok(())
+}
+
+fn forget_push(d: &mut Data, device: &str) {
+    if let Some(dev) = d.settings.phone_devices.iter_mut().find(|p| p.id == device) {
+        dev.push = None;
+        d.save_settings();
+    }
+}
+
+/// Phones that have notifications on.
+pub fn has_push(d: &Data) -> bool {
+    d.settings.phone_devices.iter().any(|p| p.push.is_some())
+}
+
+/// Sends a notification to every phone that has them on. Runs the network part without
+/// holding the data lock; subscriptions the push service reports as gone are dropped.
+pub fn push_all(shared: &Arc<Mutex<Data>>, payload: &Value) -> usize {
+    let (key, subs) = {
+        let d = shared.lock().unwrap();
+        let subs: Vec<(String, crate::push::Subscription)> = d.settings.phone_devices.iter().filter_map(|p| p.push.clone().map(|s| (p.id.clone(), s))).collect();
+        (d.settings.push_key.clone(), subs)
+    };
+    if key.is_empty() {
+        return 0;
+    }
+    let mut sent = 0;
+    for (id, sub) in subs {
+        match crate::push::send(&key, &sub, payload) {
+            Ok(()) => sent += 1,
+            Err(crate::push::SendError::Gone) => forget_push(&mut shared.lock().unwrap(), &id),
+            Err(crate::push::SendError::Other(_)) => {}
+        }
+    }
+    sent
+}
+
+fn state(d: &Data, device: &str) -> Value {
     let now = Local::now();
     let today = now.date_naive();
     let th = crate::ui::theme::th();
@@ -641,6 +749,7 @@ fn state(d: &Data) -> Value {
         "foods": foods,
         "recent_foods": recent_foods,
         "claude": crate::claude::find_cli(&d.settings).is_some(),
+        "notifications": d.settings.phone_devices.iter().any(|p| p.id == device && p.push.is_some()),
     })
 }
 

@@ -201,8 +201,9 @@ only what was asked and leave everything else out.
 | `delete_categories` | Names to delete; their tasks become `task`. `task` can't be deleted or renamed. |
 | `theme`, `font` | One of the available themes / fonts listed in the context. |
 | `default_input_mode` | `local` or `claude`. |
-| `reminders_enabled`, `remind_anytime`, `remind_calories`, `remind_weight`, `remind_journal`, `close_to_tray`, `always_on_top`, `auto_sync` | `true` / `false`. |
-| `reminder_interval_min`, `sync_interval_min` | Minutes, a whole number. |
+| `reminders_enabled`, `remind_anytime`, `remind_calories`, `remind_weight`, `remind_journal`, `remind_upcoming`, `pc_only`, `close_to_tray`, `always_on_top`, `auto_sync` | `true` / `false`. |
+| `reminder_interval_min`, `sync_interval_min`, `away_min`, `upcoming_lead_min` | Minutes, a whole number. |
+| `notify_to` | Where reminders go: `away` (phone when away from the PC), `windows`, `phone` or `both`. |
 | `calorie_reminder_after`, `weight_reminder_after`, `journal_reminder_after`, `quiet_start`, `quiet_end` | `HH:MM`. |
 
 For relative requests ("a little brighter", "less saturated", "warmer"), start from the

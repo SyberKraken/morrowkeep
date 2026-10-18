@@ -597,6 +597,19 @@ impl App {
                 {
                     self.open_settings(data, None);
                 }
+                // reminders only on this PC for now (overrides "phone when I'm away")
+                if data.settings.phone_enabled {
+                    let phone_ready = crate::phone::has_push(data);
+                    let tip = if phone_ready {
+                        "Checked: reminders only show on this PC. Unchecked: they go to your phone when you've been away from the PC for a while (Settings > Reminders)."
+                    } else {
+                        "Reminders only show on this PC. Turn on notifications in the phone app to get them on your phone too."
+                    };
+                    if ui.checkbox(&mut data.settings.pc_only, "PC only").on_hover_text(tip).changed() {
+                        data.save_settings();
+                        data.status = if data.settings.pc_only { "Reminders: this PC only".into() } else { "Reminders: phone when you're away from the PC".into() };
+                    }
+                }
                 if ui.button("📥 Import").on_hover_text("Paste JSON from your AI tools").clicked() {
                     self.import = Some(ImportDlg::default());
                 }

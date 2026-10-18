@@ -27,6 +27,8 @@ pub fn spawn(shared: Arc<Mutex<Data>>, ui: UiHandle, jobs: Receiver<Job>) {
         // First reminder check a couple of minutes after startup, then once a minute.
         let mut next_reminder_check = Instant::now() + Duration::from_secs(120);
         let mut last_reminder: Option<Instant> = None;
+        // "starting soon" reminders already given (task id @ day)
+        let mut reminded_soon: std::collections::HashSet<String> = std::collections::HashSet::new();
         let theme_mtime = |d: &Data| {
             std::fs::metadata(crate::ui::theme::theme_path(&d.paths.root, &d.settings.theme)).and_then(|m| m.modified()).ok()
         };
@@ -78,14 +80,39 @@ pub fn spawn(shared: Arc<Mutex<Data>>, ui: UiHandle, jobs: Receiver<Job>) {
 
             if Instant::now() >= next_reminder_check {
                 next_reminder_check = Instant::now() + Duration::from_secs(60);
-                let (reminder, interval, paths) = {
+                let (reminder, interval, paths, route, soon) = {
                     let d = shared.lock().unwrap();
-                    let reminder = if notify::may_remind(&d.settings) { notify::pending_reminder(&d) } else { None };
-                    (reminder, d.settings.reminder_interval_min.max(5) as u64, d.paths.clone())
+                    let may = notify::may_remind(&d.settings);
+                    let reminder = if may { notify::pending_reminder(&d) } else { None };
+                    let soon: Vec<(String, String)> =
+                        if may { notify::upcoming(&d, chrono::Local::now()).into_iter().filter(|(k, _)| !reminded_soon.contains(k)).collect() } else { Vec::new() };
+                    let route = notify::route(&d.settings, crate::phone::has_push(&d), notify::pc_idle_secs());
+                    (reminder, d.settings.reminder_interval_min.max(5) as u64, d.paths.clone(), route, soon)
                 };
+                let deliver = |r: &notify::Reminder| {
+                    let mut ok = false;
+                    if route.windows {
+                        ok |= notify::show(&paths, r).is_ok();
+                    }
+                    if route.phone {
+                        ok |= crate::phone::push_all(&shared, &notify::phone_payload(r)) > 0;
+                    }
+                    // the phone couldn't be reached: fall back to Windows
+                    if !ok && route.phone && !route.windows {
+                        ok = notify::show(&paths, r).is_ok();
+                    }
+                    ok
+                };
+                // "starting soon" for timed tasks: once per task, not held back by the interval
+                if !soon.is_empty() {
+                    let r = notify::Reminder { lines: soon.iter().map(|(_, l)| l.clone()).collect(), ..Default::default() };
+                    if deliver(&r) {
+                        reminded_soon.extend(soon.into_iter().map(|(k, _)| k));
+                    }
+                }
                 let waited = last_reminder.is_none_or(|t| t.elapsed() >= Duration::from_secs(interval * 60));
                 if let (Some(reminder), true) = (reminder, waited) {
-                    if notify::show(&paths, &reminder).is_ok() {
+                    if deliver(&reminder) {
                         last_reminder = Some(Instant::now());
                     }
                 }

@@ -76,6 +76,83 @@ fn in_quiet_hours(settings: &Settings, now: NaiveTime) -> bool {
     }
 }
 
+/// Snoozes all reminders (Windows and phone) for a while.
+pub fn snooze(hours: f64) {
+    SNOOZE_UNTIL.store(Local::now().timestamp() + (hours * 3600.0) as i64, Ordering::Relaxed);
+}
+
+/// Seconds since the last keyboard or mouse input on this PC.
+pub fn pc_idle_secs() -> u64 {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    if unsafe { GetLastInputInfo(&mut info) } == 0 {
+        return 0;
+    }
+    (unsafe { GetTickCount() }.wrapping_sub(info.dwTime) / 1000) as u64
+}
+
+/// Where a reminder should go.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct Route {
+    pub windows: bool,
+    pub phone: bool,
+}
+
+/// Routing by the settings: "PC only" wins; "away" sends to the phone when the PC hasn't been
+/// used for `away_min` minutes. Without a phone that has notifications on, it's Windows.
+pub fn route(settings: &Settings, phone_ready: bool, idle_secs: u64) -> Route {
+    let windows_only = Route { windows: true, phone: false };
+    if settings.pc_only || !phone_ready {
+        return windows_only;
+    }
+    match settings.notify_to.as_str() {
+        "windows" => windows_only,
+        "phone" => Route { windows: false, phone: true },
+        "both" => Route { windows: true, phone: true },
+        _ => {
+            let away = idle_secs >= settings.away_min.max(1) as u64 * 60;
+            Route { windows: !away, phone: away }
+        }
+    }
+}
+
+/// The notification for the phone: same words, and which screen a tap opens.
+pub fn phone_payload(r: &Reminder) -> serde_json::Value {
+    let go = if r.ask_kcal {
+        "food"
+    } else if r.ask_journal {
+        "journal"
+    } else {
+        "today"
+    };
+    serde_json::json!({"title": "Morrowkeep", "body": r.lines.join("\n"), "tag": "reminder", "go": go, "actions": true})
+}
+
+/// "Starting soon" reminders: today's timed tasks that start within `lead` minutes and
+/// aren't done. Returns (key, line) pairs; the key is used to remind only once.
+pub fn upcoming(data: &Data, now: chrono::DateTime<Local>) -> Vec<(String, String)> {
+    let s = &data.settings;
+    if !s.remind_upcoming {
+        return Vec::new();
+    }
+    let today = now.date_naive();
+    let lead = chrono::Duration::minutes(s.upcoming_lead_min.max(1) as i64);
+    let mut out = Vec::new();
+    for (_, i) in occurrences(&data.items, today, today) {
+        let it = &data.items[i];
+        let Some(t) = it.time else { continue };
+        let start = today.and_time(t);
+        let until = start - now.naive_local();
+        if it.is_done_on(today) || until <= chrono::Duration::zero() || until > lead {
+            continue;
+        }
+        let mins = (until.num_seconds() + 59) / 60;
+        out.push((format!("{}@{today}", it.id), format!("{} at {} · in {mins} min", it.title, t.format("%H:%M"))));
+    }
+    out
+}
+
 /// What a reminder toast says and which input boxes it offers.
 #[derive(Debug, Default)]
 pub struct Reminder {
@@ -311,5 +388,22 @@ mod tests {
         assert!(j.contains(r#"id="journal""#) && j.contains(r#"arguments="log""#) && !j.contains(r#"id="kcal""#));
         assert!(both.contains(r#"id="kcal""#) && both.contains(r#"id="weight""#) && both.contains(r#"arguments="log""#));
         assert!(both.contains("a &amp; b"));
+    }
+
+    #[test]
+    fn reminder_routing() {
+        let s = Settings::default(); // "away", 10 min
+        let both = |w, p| Route { windows: w, phone: p };
+        assert_eq!(route(&s, true, 60), both(true, false)); // at the PC
+        assert_eq!(route(&s, true, 11 * 60), both(false, true)); // away
+        assert_eq!(route(&s, false, 11 * 60), both(true, false)); // no phone with notifications
+        let pc_only = Settings { pc_only: true, ..Settings::default() };
+        assert_eq!(route(&pc_only, true, 3600), both(true, false)); // the top-bar checkbox wins
+        let all = Settings { notify_to: "both".into(), ..Settings::default() };
+        assert_eq!(route(&all, true, 0), both(true, true));
+        let phone = Settings { notify_to: "phone".into(), ..Settings::default() };
+        assert_eq!(route(&phone, true, 0), both(false, true));
+        let r = Reminder { lines: vec!["No calories logged today.".into()], ask_kcal: true, ..Default::default() };
+        assert_eq!(phone_payload(&r)["go"], "food");
     }
 }

@@ -88,6 +88,7 @@ pub struct SettingsPage {
     ts_name: Option<Result<String, String>>,
     ts_job: Option<Receiver<(Option<Result<String, String>>, Option<Result<String, String>>)>>,
     ts_msg: Option<(String, bool)>,
+    push_test: Option<Receiver<Result<(), String>>>,
     #[cfg(feature = "voice")]
     download: Option<(std::sync::Arc<std::sync::Mutex<f32>>, Receiver<Result<(), String>>)>,
 }
@@ -110,6 +111,7 @@ impl SettingsPage {
             ts_name: None,
             ts_job: None,
             ts_msg: None,
+            push_test: None,
             #[cfg(feature = "voice")]
             download: None,
         }
@@ -643,6 +645,32 @@ impl SettingsPage {
                 ui.add(egui::TextEdit::singleline(&mut self.draft.journal_reminder_after).desired_width(50.0));
             });
             ui.end_row();
+            ui.label("");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.draft.remind_upcoming, "Tasks with a time, starting soon:");
+                ui.add(egui::DragValue::new(&mut self.draft.upcoming_lead_min).range(1..=120).suffix(" min before"));
+            });
+            ui.end_row();
+            ui.label("Deliver to");
+            ui.vertical(|ui| {
+                let phone_ready = crate::phone::has_push(data);
+                ui.radio_value(&mut self.draft.notify_to, "away".to_string(), "My phone when I'm away from the PC, else this PC");
+                ui.indent("away_opts", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("away = no keyboard or mouse for");
+                        ui.add(egui::DragValue::new(&mut self.draft.away_min).range(1..=120).suffix(" min"));
+                    });
+                });
+                ui.radio_value(&mut self.draft.notify_to, "windows".to_string(), "This PC only");
+                ui.radio_value(&mut self.draft.notify_to, "phone".to_string(), "My phone only");
+                ui.radio_value(&mut self.draft.notify_to, "both".to_string(), "Both");
+                if !phone_ready {
+                    ui.label(RichText::new("No phone has notifications on yet, so reminders show on this PC. Pair a phone (Settings > Phone) and tap the bell in its app.").weak().size(12.0));
+                } else if data.settings.pc_only {
+                    ui.label(RichText::new("\"PC only\" is checked in the top bar, so right now everything stays on this PC.").color(super::theme::th().status.warning).size(12.0));
+                }
+            });
+            ui.end_row();
             ui.label("Quiet hours");
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.draft.quiet_start).desired_width(50.0));
@@ -907,6 +935,24 @@ impl SettingsPage {
                 ui.label(RichText::new(&dev.name).strong());
                 let seen = crate::phone::last_seen(&dev.id).map(|d| format!(" · last used {}", d.format("%b %-d %H:%M"))).unwrap_or_default();
                 ui.label(RichText::new(format!("paired {}{seen}", dev.added.format("%b %-d, %Y"))).weak().size(12.5));
+                match &dev.push {
+                    Some(sub) => {
+                        ui.label(RichText::new("🔔 notifications on").color(ok_color()).size(12.5));
+                        if ui.small_button("Send test").clicked() {
+                            let (key, sub, c) = (data.settings.push_key.clone(), sub.clone(), ui.ctx().clone());
+                            let (tx, rx) = mpsc::channel();
+                            std::thread::spawn(move || {
+                                let payload = serde_json::json!({"title": "Morrowkeep", "body": "Test notification from your PC.", "tag": "test", "go": "today"});
+                                let _ = tx.send(crate::push::send(&key, &sub, &payload).map_err(|e| format!("{e:?}")));
+                                c.request_repaint();
+                            });
+                            self.push_test = Some(rx);
+                        }
+                    }
+                    None => {
+                        ui.label(RichText::new("notifications off (turn on with the bell in the phone app)").weak().size(12.5));
+                    }
+                }
                 if ui.small_button("Remove").on_hover_text("It stops working right away after Save").clicked() {
                     remove = Some(i);
                 }
@@ -914,6 +960,15 @@ impl SettingsPage {
         }
         if let Some(i) = remove {
             self.draft.phone_devices.remove(i);
+        }
+        if let Some(rx) = &self.push_test {
+            if let Ok(r) = rx.try_recv() {
+                self.ts_msg = Some(match r {
+                    Ok(()) => ("Test notification sent".into(), true),
+                    Err(e) => (format!("Couldn't send it: {e}"), false),
+                });
+                self.push_test = None;
+            }
         }
     }
 }

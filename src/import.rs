@@ -775,6 +775,11 @@ const SIMPLE_SETTINGS: &[&str] = &[
     "weight_reminder_after",
     "remind_journal",
     "journal_reminder_after",
+    "notify_to",
+    "away_min",
+    "pc_only",
+    "remind_upcoming",
+    "upcoming_lead_min",
     "quiet_start",
     "quiet_end",
     "close_to_tray",
@@ -803,6 +808,7 @@ fn settings_from(v: Value, current: &Settings, existing: &[Item]) -> Result<Sett
         let Some(val) = o.remove(*key) else { continue };
         let ok = match *key {
             "default_input_mode" => matches!(val.as_str(), Some("local" | "claude")),
+            "notify_to" => matches!(val.as_str(), Some("away" | "windows" | "phone" | "both")),
             "font" => val.as_str().is_some_and(|f| crate::ui::theme::FONTS.iter().any(|(v, _)| *v == f)),
             "theme" => val.as_str().is_some_and(|t| !t.trim().is_empty()),
             k if k.ends_with("_after") || k.starts_with("quiet_") => {

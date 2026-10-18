@@ -88,6 +88,17 @@ pub struct Settings {
     pub phone_enabled: bool,
     pub phone_port: u16,
     pub phone_devices: Vec<crate::phone::PhoneDevice>,
+    /// This PC's private key for signing phone notifications (made once; never shown).
+    pub push_key: String,
+    /// Where reminders go: "away" (phone when the PC hasn't been used for `away_min`
+    /// minutes, else Windows), "windows", "phone" or "both".
+    pub notify_to: String,
+    pub away_min: u32,
+    /// The "PC only" checkbox in the top bar: reminders only on this PC for now.
+    pub pc_only: bool,
+    /// "Starting soon" reminders for tasks with a time, `upcoming_lead_min` before.
+    pub remind_upcoming: bool,
+    pub upcoming_lead_min: u32,
     /// UI font: "inter" (default), "nunito", "segoe" or "egui".
     pub font: String,
     /// Theme file (stem) in the themes folder, e.g. "night-sky".
@@ -141,6 +152,12 @@ impl Default for Settings {
             phone_enabled: false,
             phone_port: 8787,
             phone_devices: Vec::new(),
+            push_key: String::new(),
+            notify_to: "away".into(),
+            away_min: 10,
+            pc_only: false,
+            remind_upcoming: true,
+            upcoming_lead_min: 15,
             font: "inter".into(),
             theme: "night-sky".into(),
             reminders_enabled: true,
