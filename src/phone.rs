@@ -481,7 +481,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
                 Some(Err(e)) => Ok(json!({"status": "error", "error": e})),
                 Some(Ok(text)) => {
                     let d = shared.lock().unwrap();
-                    let plan = crate::import::plan(text, &d.items, &d.calories, &d.settings, &d.foods, today);
+                    let plan = crate::import::plan(text, &d.items, &d.calories, &d.settings, &d.foods, &d.exercises.exercises, today);
                     let lines: Vec<String> = plan.ops.iter().map(|o| o.describe()).collect();
                     Ok(json!({"status": "done", "message": plan.message, "lines": lines, "errors": plan.errors, "can_apply": plan.errors.is_empty() && !plan.ops.is_empty()}))
                 }
@@ -498,7 +498,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
                 }
             };
             let mut d = shared.lock().unwrap();
-            let plan = crate::import::plan(&text, &d.items, &d.calories, &d.settings, &d.foods, today);
+            let plan = crate::import::plan(&text, &d.items, &d.calories, &d.settings, &d.foods, &d.exercises.exercises, today);
             if !plan.errors.is_empty() {
                 return Err(bad(plan.errors.join("; ")));
             }

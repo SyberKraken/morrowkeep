@@ -49,7 +49,7 @@ Tick the boxes as steps are finished, so work can resume from here.
   back / skip, adjust reps/kg of the set just done, next-up preview, summary at the end.
 - [x] **4. History and progress** (done 2026-10-18: History section, per-exercise last/best + progress plot on the info page, workout.task ticks a task off when finished): save sessions, history list, per-exercise last/best on the
   info page, progress chart, link a workout to a task (tick it off when finished).
-- [ ] **5. Claude**: "Fill in with Claude" for a new exercise; "Build with Claude" for a
+- [x] **5. Claude** (done 2026-10-18: ✨ Fill in with Claude on the exercise editor, ✨ Build in the Workouts list with a Save/Discard preview, `workouts` in imports, library in the Claude context, IMPORT_FORMAT.md "Workouts"): "Fill in with Claude" for a new exercise; "Build with Claude" for a
   workout (uses only library exercises, reviewed before saving); library in Claude context;
   import format docs.
 - [ ] 6. Later (not now): phone player.

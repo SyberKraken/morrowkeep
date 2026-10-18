@@ -160,6 +160,38 @@ day, and a new value replaces that day's old one.
 `kg` is required (a number, in kilograms). Convert from pounds if needed (1 lb = 0.4536 kg).
 `date` defaults to today.
 
+## Workouts
+
+When the user asks for a workout, add a top-level `"workouts"` array. Use **only exercise ids
+from the exercise library** in the context (home equipment: dumbbells, a flat bench that doesn't
+recline, a mat). Items run in order:
+
+```json
+{
+  "morrowkeep_import": 1,
+  "workouts": [
+    {
+      "name": "Push day · 20 min",
+      "notes": "Chest, shoulders and triceps.",
+      "items": [
+        { "type": "exercise", "exercise": "arm-circles", "sets": 1, "seconds": 45 },
+        { "type": "break", "seconds": 30, "label": "Get your dumbbells" },
+        { "type": "exercise", "exercise": "db-bench-press", "sets": 3, "reps": 10, "kg": 12, "rest_s": 60 },
+        { "type": "exercise", "exercise": "plank", "sets": 2, "seconds": 40, "rest_s": 30 }
+      ]
+    }
+  ]
+}
+```
+
+| field | meaning |
+|---|---|
+| `name` | Required. Short. |
+| `items` | Required. `{"type": "exercise", "exercise": <library id>, "sets", "reps"?, "seconds"?, "kg"?, "rest_s"?}` or `{"type": "break", "seconds", "label"?}`. |
+| `reps` / `seconds` | At least one. With `seconds` the set is timed and moves on by itself; with only `reps` the user taps Done. For "reps per side" exercises, `reps` is per side. |
+| `kg` | Per dumbbell (two 12 kg dumbbells = 12). Leave out for bodyweight. |
+| `rest_s` | Rest between sets of that exercise, in seconds. |
+
 ## Journal
 
 When the user asks you to write something in their journal, add a top-level `"journal"` array:

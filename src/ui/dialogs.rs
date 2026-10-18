@@ -314,7 +314,7 @@ impl ImportDlg {
                         .hint_text("{ \"morrowkeep_import\": 1, \"items\": [ … ] }"),
                 );
             });
-            let plan = (!self.text.trim().is_empty()).then(|| import::plan(&self.text, &data.items, &data.calories, &data.settings, &data.foods, Local::now().date_naive()));
+            let plan = (!self.text.trim().is_empty()).then(|| import::plan(&self.text, &data.items, &data.calories, &data.settings, &data.foods, &data.exercises.exercises, Local::now().date_naive()));
             if let Some(p) = &plan {
                 egui::ScrollArea::vertical().max_height(180.0).id_salt("import_preview").show(ui, |ui| {
                     for e in &p.errors {

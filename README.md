@@ -114,6 +114,21 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   - On the **Habits page**, a quick journal card (type or 🎤) adds an entry, and any entry today
     lights the *journal* star in the constellation. In the entry bar, `journal: …` or
     `dear diary …` saves an entry too. Typing anywhere on the Journal page starts an entry.
+- **Workouts tab.** Home workouts with dumbbells, bodyweight and a flat bench:
+  - **Exercises:** a library of about 50 exercises, each with an info page (steps, good form,
+    common mistakes, easier/harder versions, equipment) and a front/back muscle map. Filter by
+    equipment or muscle, edit any of them, or add your own; **✨ Fill in with Claude** writes the
+    details for a new one.
+  - **Workouts:** exercises in order with sets, reps and/or a time, kg (per dumbbell; two 15 kg
+    dumbbells = 15), rest between sets, and timed breaks. Five starter workouts are included.
+    **✨ Build** asks Claude for a workout from your library ("20 minute push workout"); you
+    see it before saving. A workout can tick off a task when you finish it.
+  - **▶ Start workout** opens a full-window player with a big countdown ring. Timed steps move
+    on by themselves; sets with only reps wait for **Done set**. It beeps when moving on and
+    in the last 3 seconds. Space pauses, Enter marks a set done; you can go back, skip, and
+    adjust the reps/kg you actually did.
+  - **History:** every session with its sets, and on each exercise page your last time, best,
+    and a progress chart.
 - **Settings tab.** A full page with sections on the left (General, Appearance, Categories,
   Input & voice, Reminders, Google Calendar). Changes are a draft until you press Save (or
   Ctrl+S); Revert throws them away, and the Settings button shows a dot while something is
@@ -202,9 +217,11 @@ LLVM (see the comment in `Cargo.toml`).
 | `foods.json` | Food library: ingredients and meals. |
 | `journal-audio/` | Journal voice recordings (WAV). |
 | `settings.json` | Settings, including your categories and color choices. Editable on the Settings tab. |
+| `exercises.json`, `workouts.json` | Exercise library and your workouts (built-ins merge in unless you edited or deleted them). |
+| `workout_log.json` | Finished workout sessions, set by set. |
 | `body.json` | Body profile, goal weight (with earlier goals) and the fallback calorie limit. Editable on the Body tab. |
 | `inbox/` | Drop import `.json` files here. They are moved to `imported/`, or to `failed/` with an `.errors.txt`. |
-| `backups/` | Daily copies of `items.json`, `calories.json`, `weight.json`, `journal.json` and `foods.json`, keeping 14 days of each. |
+| `backups/` | Daily copies of `items.json`, `calories.json`, `weight.json`, `journal.json`, `foods.json`, `exercises.json`, `workouts.json` and `workout_log.json`, keeping 14 days of each. |
 | `models/` | Whisper voice models. |
 | `google_token.json` | Google sign-in token. Delete it to disconnect. |
 | `google_events_cache.json`, `sync_state.json` | Sync bookkeeping. |
@@ -322,7 +339,7 @@ files always list every option. Sections:
 | `widget` | buttons (`fill`, `fill_hover`, `fill_active`, `border`, `border_hover`), `selection`, `link` |
 | `status` | `success` (done, all done), `danger` (over budget, errors), `warning` (cautions such as a too-fast goal), `danger_background` |
 | `kinds` | default color per category; a color picked in Settings > Categories wins. Unknown kinds use `other` |
-| `data` | `brand` (logo and name), `today` (today's ring in the calendar), `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line`, `goal` (goal line, star, planned path), `trend` (7-day average and projection), `journal` |
+| `data` | `brand` (logo and name), `today` (today's ring in the calendar), `calories`, `weight`, `claude`, `google`, `not_logged`, `gold`, `now_line`, `chart_limit_line`, `goal` (goal line, star, planned path), `trend` (7-day average and projection), `journal`, `workout`, `rest` |
 | `sky` | the star field: `star` color (alpha = max brightness) and `density` (0 = off) |
 | `shape` | `card_radius`, `tile_radius`, `widget_radius` |
 | `charts` | `line_fill_alpha` (area under the weight line, 0 = none) and `bar_radius` (rounded bar tops) |

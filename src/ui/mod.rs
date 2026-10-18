@@ -279,7 +279,7 @@ impl App {
             }
         }
         let Some((request, text)) = &self.claude_reply else { return };
-        let plan = import::plan(text, &data.items, &data.calories, &data.settings, &data.foods, Local::now().date_naive());
+        let plan = import::plan(text, &data.items, &data.calories, &data.settings, &data.foods, &data.exercises.exercises, Local::now().date_naive());
         let mut close = false;
         let mut discard = false;
         let mut edit = None;

@@ -30,11 +30,17 @@ pub struct WorkoutsUi {
     player: Option<super::player::Player>,
     /// Selected session in History.
     session: Option<String>,
+    /// Claude: filling in an exercise (id, reply); building a workout (request, reply, result).
+    filling: Option<(String, std::sync::mpsc::Receiver<Result<String, String>>)>,
+    build_text: String,
+    build_request: String,
+    building: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    built: Option<String>,
 }
 
 impl Default for WorkoutsUi {
     fn default() -> Self {
-        WorkoutsUi { section: Section::Exercises, search: String::new(), equipment: Vec::new(), muscle: None, selected: None, editing: false, confirm_delete: false, workout: None, add_search: String::new(), player: None, session: None }
+        WorkoutsUi { section: Section::Exercises, search: String::new(), equipment: Vec::new(), muscle: None, selected: None, editing: false, confirm_delete: false, workout: None, add_search: String::new(), player: None, session: None, filling: None, build_text: String::new(), build_request: String::new(), building: None, built: None }
     }
 }
 
@@ -48,6 +54,7 @@ fn chip(ui: &mut Ui, on: bool, text: &str) -> bool {
 
 impl WorkoutsUi {
     pub fn page(&mut self, ctx: &egui::Context, data: &mut Data) {
+        self.poll_claude(ctx, data);
         if let Some(p) = &mut self.player {
             let mut keep = true;
             egui::CentralPanel::default().show(ctx, |ui| keep = p.show(ui, data));
@@ -63,7 +70,10 @@ impl WorkoutsUi {
                 ui.add_space(10.0);
                 match self.section {
                     Section::Exercises => self.exercise_page(ui, data),
-                    Section::Workouts => self.workout_page(ui, data),
+                    Section::Workouts => {
+                        self.built_preview(ui, data);
+                        self.workout_page(ui, data);
+                    }
                     Section::History => self.history_page(ui, data),
                 }
             });
@@ -350,9 +360,26 @@ impl WorkoutsUi {
         if e.builtin {
             ui.label(RichText::new("Built-in exercise: once edited, it keeps your version instead of updates.").size(12.0).color(t.text.muted));
         }
+        let (eid, ename) = (e.id.clone(), e.name.clone());
+        let mut fill = false;
+        if self.filling.as_ref().is_some_and(|(id, _)| *id == eid) {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Claude is writing it up…");
+            });
+        } else if ui
+            .button(RichText::new("✨ Fill in with Claude").color(t.data.claude))
+            .on_hover_text("Claude writes the steps, form cues, muscles and equipment from the name (uses a little of your Claude plan)")
+            .clicked()
+        {
+            fill = true;
+        }
         if changed {
             e.edited = true;
             data.save_exercises();
+        }
+        if fill {
+            self.start_fill(data, &eid, &ename);
         }
     }
 }
@@ -474,6 +501,16 @@ impl WorkoutsUi {
             data.workouts.workouts.push(w);
             data.save_workouts();
         }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let r = ui.add(egui::TextEdit::singleline(&mut self.build_text).hint_text("30 min upper body…").desired_width(ui.available_width() - 82.0));
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (ui.add_enabled(self.building.is_none(), egui::Button::new(RichText::new("✨ Build").color(theme::th().data.claude))).on_hover_text("Claude builds a workout from your exercise library; you review it before saving").clicked() || enter)
+                && self.building.is_none()
+            {
+                self.start_build(data);
+            }
+        });
         ui.add_space(4.0);
         let lib = &data.exercises.exercises;
         let mut pick = None;
@@ -843,4 +880,166 @@ impl WorkoutsUi {
             self.confirm_delete = false;
         }
     }
+}
+
+// ---------------------------------------------------------------- Claude (step 5)
+
+fn ask_claude_bg(data: &Data, prompt: String) -> Option<std::sync::mpsc::Receiver<Result<String, String>>> {
+    let cli = crate::claude::find_cli(&data.settings)?;
+    let (model, dir) = (data.settings.claude_model.clone(), data.paths.root.clone());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::claude::ask(&cli, &model, &prompt, &dir));
+    });
+    Some(rx)
+}
+
+impl WorkoutsUi {
+    /// Finishes background Claude requests (exercise fill-in, workout building).
+    fn poll_claude(&mut self, ctx: &egui::Context, data: &mut Data) {
+        if self.filling.is_some() || self.building.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
+        }
+        if let Some((id, rx)) = &self.filling {
+            if let Ok(res) = rx.try_recv() {
+                let id = id.clone();
+                self.filling = None;
+                match res.and_then(|text| fill_from(&text)) {
+                    Ok(v) => {
+                        if let Some(e) = data.exercises.exercises.iter_mut().find(|e| e.id == id) {
+                            let list = |k: &str, allowed: &dyn Fn(&str) -> bool| -> Vec<String> {
+                                v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).filter(|x| allowed(x)).map(str::to_string).collect()).unwrap_or_default()
+                            };
+                            let text = |k: &str| -> Vec<String> { v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default() };
+                            let eq = list("equipment", &|x| EQUIPMENT.iter().any(|(k, _)| *k == x));
+                            if !eq.is_empty() {
+                                e.equipment = eq;
+                            }
+                            e.muscles_main = list("muscles_main", &|x| MUSCLES.contains(&x));
+                            e.muscles_helping = list("muscles_helping", &|x| MUSCLES.contains(&x));
+                            if let Some(l) = v["level"].as_str().filter(|l| LEVELS.contains(l)) {
+                                e.level = l.into();
+                            }
+                            if let Some(k) = v["kind"].as_str().filter(|k| KINDS.iter().any(|(x, _)| x == k)) {
+                                e.kind = k.into();
+                            }
+                            e.steps = text("steps");
+                            e.form = text("form");
+                            e.mistakes = text("mistakes");
+                            e.easier = v["easier"].as_str().unwrap_or("").trim().to_string();
+                            e.harder = v["harder"].as_str().unwrap_or("").trim().to_string();
+                            e.edited = true;
+                            let name = e.name.clone();
+                            data.save_exercises();
+                            data.status = format!("Claude filled in {name}. Check it over.");
+                        }
+                    }
+                    Err(err) => data.status = format!("Claude couldn't fill it in: {err}"),
+                }
+            }
+        }
+        if let Some(rx) = &self.building {
+            if let Ok(res) = rx.try_recv() {
+                self.building = None;
+                match res {
+                    Ok(text) => self.built = Some(text),
+                    Err(e) => data.status = format!("Claude: {e}"),
+                }
+            }
+        }
+    }
+
+    fn start_fill(&mut self, data: &mut Data, id: &str, name: &str) {
+        let muscles = MUSCLES.join(", ");
+        let equipment = EQUIPMENT.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ");
+        let prompt = format!(
+            "Describe the home exercise \"{name}\" for an exercise library (equipment available: dumbbells, a flat bench that doesn't recline, a mat). \
+             Reply with ONLY this JSON, no other text: {{\"equipment\": [from: {equipment}], \"muscles_main\": [from: {muscles}], \"muscles_helping\": [same list], \
+             \"level\": \"beginner\"|\"intermediate\"|\"advanced\", \"kind\": \"reps\"|\"reps_per_side\"|\"time\", \"steps\": [3-5 short steps], \"form\": [2-3 good-form cues], \
+             \"mistakes\": [1-3 common mistakes], \"easier\": \"an easier version\", \"harder\": \"a harder version\"}}"
+        );
+        match ask_claude_bg(data, prompt) {
+            Some(rx) => self.filling = Some((id.to_string(), rx)),
+            None => data.status = "Claude Code wasn't found (Settings > Input & voice)".into(),
+        }
+    }
+
+    fn start_build(&mut self, data: &mut Data) {
+        let request = self.build_text.trim().to_string();
+        if request.is_empty() {
+            return;
+        }
+        let prompt = crate::claude::build_prompt(
+            data,
+            &format!(
+                "Create a home workout and add it under \"workouts\" (only use exercise ids from my exercise library; I have dumbbells, a flat non-reclining bench and a mat; \
+                 kg is per dumbbell; give reps or seconds for every exercise, rest_s between sets, and breaks where they make sense). The workout: {request}"
+            ),
+        );
+        match ask_claude_bg(data, prompt) {
+            Some(rx) => {
+                self.building = Some(rx);
+                self.built = None;
+                self.build_request = request;
+            }
+            None => data.status = "Claude Code wasn't found (Settings > Input & voice)".into(),
+        }
+    }
+
+    /// Claude's workout, for review: Save or Discard.
+    fn built_preview(&mut self, ui: &mut Ui, data: &mut Data) {
+        let t = theme::th();
+        if self.building.is_some() {
+            theme::card().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new(format!("Claude is building \"{}\"…", self.build_request)).color(t.data.claude));
+                });
+            });
+            ui.add_space(8.0);
+            return;
+        }
+        let Some(text) = self.built.clone() else { return };
+        let plan = crate::import::plan(&text, &data.items, &data.calories, &data.settings, &data.foods, &data.exercises.exercises, chrono::Local::now().date_naive());
+        let mut close = false;
+        let mut save = false;
+        theme::card().stroke(Stroke::new(1.0, t.data.claude)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(format!("Claude · \"{}\"", self.build_request)).color(t.data.claude).strong());
+            if let Some(m) = &plan.message {
+                ui.label(RichText::new(m).italics());
+            }
+            for e in &plan.errors {
+                ui.label(RichText::new(format!("⚠ {e}")).color(t.status.danger));
+            }
+            for op in &plan.ops {
+                ui.label(RichText::new(op.describe()).monospace().size(12.5));
+            }
+            ui.horizontal(|ui| {
+                if plan.errors.is_empty() && !plan.ops.is_empty() && ui.button(RichText::new("Save workout").strong()).clicked() {
+                    save = true;
+                }
+                if ui.button("Discard").clicked() {
+                    close = true;
+                }
+            });
+        });
+        ui.add_space(8.0);
+        if save {
+            let summary = crate::import::apply(data, plan.ops);
+            data.status = format!("Claude: {summary}");
+            self.workout = data.workouts.workouts.last().map(|w| w.id.clone());
+            close = true;
+        }
+        if close {
+            self.built = None;
+        }
+    }
+}
+
+/// The JSON object in Claude's reply.
+fn fill_from(text: &str) -> Result<serde_json::Value, String> {
+    let (a, b) = (text.find('{').ok_or("no JSON in the reply")?, text.rfind('}').ok_or("no JSON in the reply")?);
+    serde_json::from_str(&text[a..=b]).map_err(|e| e.to_string())
 }
