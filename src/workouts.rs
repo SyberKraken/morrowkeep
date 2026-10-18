@@ -298,6 +298,84 @@ impl Workout {
     }
 }
 
+// ---------------------------------------------------------------- playing and history
+
+/// One step of a workout as it's played: a set of an exercise, or a rest.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Step {
+    Set { exercise: String, name: String, set: u32, sets: u32, reps: Option<u32>, seconds: Option<u32>, kg: Option<f32>, per_side: bool },
+    Rest { seconds: u32, label: String },
+}
+
+impl Step {
+    /// Seconds the step's timer runs; None for a set with only reps (waits for "Done set").
+    pub fn duration(&self) -> Option<u32> {
+        match self {
+            Step::Set { seconds, .. } => *seconds,
+            Step::Rest { seconds, .. } => Some(*seconds),
+        }
+    }
+}
+
+impl Workout {
+    /// The workout as steps: each set, the rest between sets, and breaks.
+    pub fn steps(&self, lib: &[Exercise]) -> Vec<Step> {
+        let mut out = Vec::new();
+        for item in &self.items {
+            match item {
+                Item::Break { seconds, label } => out.push(Step::Rest { seconds: *seconds, label: if label.is_empty() { "Break".into() } else { label.clone() } }),
+                Item::Exercise { exercise, sets, reps, seconds, kg, rest_s } => {
+                    let e = lib.iter().find(|e| e.id == *exercise);
+                    let name = e.map_or(exercise.clone(), |e| e.name.clone());
+                    let per_side = e.is_some_and(|e| e.kind == "reps_per_side");
+                    for set in 1..=(*sets).max(1) {
+                        out.push(Step::Set { exercise: exercise.clone(), name: name.clone(), set, sets: *sets, reps: *reps, seconds: *seconds, kg: *kg, per_side });
+                        if set < *sets && *rest_s > 0 {
+                            out.push(Step::Rest { seconds: *rest_s, label: "Rest".into() });
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A set as it was done.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SetDone {
+    pub exercise: String,
+    pub name: String,
+    pub set: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reps: Option<u32>,
+    pub seconds: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kg: Option<f32>,
+}
+
+/// A finished (or ended early) workout.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Session {
+    pub id: String,
+    pub date: chrono::NaiveDate,
+    /// "HH:MM" it started.
+    pub start: String,
+    pub duration_s: u32,
+    pub workout_id: String,
+    pub workout: String,
+    pub sets: Vec<SetDone>,
+    pub completed: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkoutLog {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub sessions: Vec<Session>,
+}
+
 /// "28 min", "45 s".
 pub fn duration_label(secs: u32) -> String {
     if secs >= 60 {
@@ -362,5 +440,25 @@ mod tests {
         // stored readably
         let json = serde_json::to_string(&Item::Break { seconds: 60, label: String::new() }).unwrap();
         assert_eq!(json, r#"{"type":"break","seconds":60}"#);
+    }
+
+    #[test]
+    fn workouts_become_steps() {
+        let lib = builtins();
+        let w = Workout {
+            items: vec![
+                Item::Exercise { exercise: "db-curl".into(), sets: 3, reps: Some(10), seconds: None, kg: Some(8.0), rest_s: 60 },
+                Item::Break { seconds: 90, label: String::new() },
+                Item::Exercise { exercise: "plank".into(), sets: 2, reps: None, seconds: Some(40), kg: None, rest_s: 0 },
+            ],
+            ..Default::default()
+        };
+        let steps = w.steps(&lib);
+        // 3 sets + 2 rests, a break, 2 plank sets (no rest)
+        assert_eq!(steps.len(), 8);
+        assert_eq!(steps[0].duration(), None); // reps only: waits for Done set
+        assert_eq!(steps[1], Step::Rest { seconds: 60, label: "Rest".into() });
+        assert_eq!(steps[5], Step::Rest { seconds: 90, label: "Break".into() });
+        assert_eq!(steps[6].duration(), Some(40));
     }
 }

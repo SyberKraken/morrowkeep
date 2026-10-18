@@ -44,7 +44,7 @@ Tick the boxes as steps are finished, so work can resume from here.
 - [x] **2. Workouts** (done 2026-10-18: Item/Workout model + 5 starters in src/workouts_starter.json, builder in src/ui/workouts.rs; Start button is a stub until step 3): builder (exercise items with sets/reps/seconds/kg/rest, break items,
   reorder up/down or drag, remove), duration + equipment summary, starter workouts
   (full body, upper, lower, core, 10-min quick).
-- [ ] **3. Player**: full-window view, big circle timer, timed steps auto-advance, rep-only
+- [x] **3. Player** (done 2026-10-18: src/ui/player.rs; Step expansion + Session/WorkoutLog in src/workouts.rs; sessions already saved to workout_log.json at the end, so step 4 only needs the History UI, per-exercise last/best, progress chart and task linking): full-window view, big circle timer, timed steps auto-advance, rep-only
   sets wait for "Done set", rests between sets, beeps (moving on + last 3 s), pause /
   back / skip, adjust reps/kg of the set just done, next-up preview, summary at the end.
 - [ ] **4. History and progress**: save sessions, history list, per-exercise last/best on the

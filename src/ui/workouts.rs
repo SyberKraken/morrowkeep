@@ -25,11 +25,13 @@ pub struct WorkoutsUi {
     /// Selected workout, and the exercise search for adding to it.
     workout: Option<String>,
     add_search: String,
+    /// The workout being done, full window.
+    player: Option<super::player::Player>,
 }
 
 impl Default for WorkoutsUi {
     fn default() -> Self {
-        WorkoutsUi { section: Section::Exercises, search: String::new(), equipment: Vec::new(), muscle: None, selected: None, editing: false, confirm_delete: false, workout: None, add_search: String::new() }
+        WorkoutsUi { section: Section::Exercises, search: String::new(), equipment: Vec::new(), muscle: None, selected: None, editing: false, confirm_delete: false, workout: None, add_search: String::new(), player: None }
     }
 }
 
@@ -43,6 +45,14 @@ fn chip(ui: &mut Ui, on: bool, text: &str) -> bool {
 
 impl WorkoutsUi {
     pub fn page(&mut self, ctx: &egui::Context, data: &mut Data) {
+        if let Some(p) = &mut self.player {
+            let mut keep = true;
+            egui::CentralPanel::default().show(ctx, |ui| keep = p.show(ui, data));
+            if !keep {
+                self.player = None;
+            }
+            return;
+        }
         egui::SidePanel::left("workouts_side").resizable(false).exact_width(300.0).show(ctx, |ui| self.sidebar(ui, data));
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -656,8 +666,7 @@ impl WorkoutsUi {
 }
 
 impl WorkoutsUi {
-    /// The player arrives in step 3 of WORKOUTS_PLAN.md.
-    fn start_player(&mut self, data: &mut Data, _wi: usize) {
-        data.status = "The workout player comes in the next step".into();
+    fn start_player(&mut self, data: &mut Data, wi: usize) {
+        self.player = Some(super::player::Player::new(&data.workouts.workouts[wi], &data.exercises.exercises));
     }
 }

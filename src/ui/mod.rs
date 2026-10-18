@@ -9,6 +9,7 @@ mod dialogs;
 mod foods;
 mod journal;
 mod palettes;
+mod player;
 mod settings;
 mod views;
 mod workouts;
