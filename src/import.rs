@@ -146,6 +146,8 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
         }
     };
     let mut cal_entries = Vec::new();
+    // The food library as it will be after this import, so calories can use foods it adds.
+    let mut lib = foods.clone();
     let mut weight_entries = Vec::new();
     // Day that calories, weight, journal entries and check-offs belong to unless they say
     // otherwise: today, or the import's top-level "date" (e.g. yesterday, after midnight).
@@ -201,8 +203,15 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
             match o.remove("foods") {
                 Some(Value::Array(a)) => {
                     for (n, v) in a.into_iter().enumerate() {
-                        match food_from(v, foods) {
-                            Ok(f) => plan.ops.push(Op::SaveFood(f)),
+                        match food_from(v, &lib) {
+                            Ok(f) => {
+                                let key = crate::foods::norm(&f.name);
+                                match lib.foods.iter_mut().find(|x| crate::foods::norm(&x.name) == key) {
+                                    Some(x) => *x = f.clone(),
+                                    None => lib.foods.push(f.clone()),
+                                }
+                                plan.ops.push(Op::SaveFood(f));
+                            }
                             Err(e) => plan.errors.push(format!("foods {}: {e}", n + 1)),
                         }
                     }
@@ -272,7 +281,7 @@ pub fn plan(text: &str, existing: &[Item], calories: &[CalorieEntry], settings: 
             plan.errors.push(format!("{label}: must be an object"));
             continue;
         };
-        match calories_from(obj, today, day, foods) {
+        match calories_from(obj, today, day, &lib) {
             Ok(c) => plan.ops.push(Op::LogCalories(c)),
             Err(errs) => plan.errors.extend(errs.into_iter().map(|e| format!("{label}: {e}"))),
         }
@@ -1328,6 +1337,11 @@ mod tests {
         assert_eq!(bad.errors.len(), 1);
         let ok = plan(r#"{"calories":[{"food":"burrito","kcal":800}]}"#, &[], &[], &Settings::default(), &lib, &[], today);
         assert!(ok.errors.is_empty());
+        // a food added in the same import can be logged right away
+        let both = plan(r#"{"calories":[{"food":"Skyr","servings":1}],"foods":[{"name":"Skyr","kcal_per_100g":60,"serving_g":200,"serving_name":"cup"}]}"#, &[], &[], &Settings::default(), &lib, &[], today);
+        assert!(both.errors.is_empty(), "{:?}", both.errors);
+        assert!(matches!(&both.ops[0], Op::SaveFood(_)));
+        assert!(matches!(&both.ops[1], Op::LogCalories(c) if c.kcal == 120));
         // saving foods: new, and a partial update of an existing one
         let f = plan(r#"{"foods":[{"name":"Oats","kcal_per_100g":370,"serving_g":40},{"name":"kvarg","serving_g":500}]}"#, &[], &[], &Settings::default(), &lib, &[], today);
         assert!(f.errors.is_empty(), "{:?}", f.errors);

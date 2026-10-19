@@ -148,6 +148,14 @@ their values).
 `name` is required, and `kcal_per_100g` too for a new food. Use the numbers the user gives;
 only estimate (on the high side) if they ask you to.
 
+A food added in `"foods"` can be logged in the same import ("add skyr, 60 kcal/100 g, 200 g
+cup, and log 1 cup"): put it in `"foods"` and log it in `"calories"` with `"food"` + `"servings"`
+or `"grams"`, and the new food's numbers are used.
+
+```json
+{ "morrowkeep_import": 1, "foods": [ { "name": "Skyr", "kcal_per_100g": 60, "serving_g": 200, "serving_name": "cup" } ], "calories": [ { "food": "Skyr", "servings": 1 } ] }
+```
+
 ## Logging weight
 
 When the user tells you their weight, add a top-level `"weight"` array. There's one value per
