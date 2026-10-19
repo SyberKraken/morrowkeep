@@ -895,6 +895,10 @@ impl eframe::App for App {
             View::Workouts => self.workouts_ui.page(ctx, &mut data),
             View::Settings => {
                 let page = self.settings.get_or_insert_with(|| settings::SettingsPage::open(&data));
+                #[cfg(feature = "voice")]
+                if page.section != settings::Section::Input {
+                    page.stop_mic_test();
+                }
                 egui::SidePanel::left("settings_nav").resizable(false).exact_width(210.0).show(ctx, |ui| page.nav(ui, &data));
                 egui::CentralPanel::default().show(ctx, |ui| page.show(ui, &mut data, &self.jobs));
             }

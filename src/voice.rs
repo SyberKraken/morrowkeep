@@ -21,6 +21,8 @@ pub struct Recorder {
     _stream: cpal::Stream,
     samples: Arc<Mutex<Vec<f32>>>,
     rate: u32,
+    /// The microphone's name, as Windows shows it.
+    pub device: String,
 }
 
 impl Recorder {
@@ -28,6 +30,7 @@ impl Recorder {
         let host = cpal::default_host();
         let device = host.default_input_device().ok_or("No microphone found")?;
         let config = device.default_input_config().map_err(|e| e.to_string())?;
+        let name = device.name().unwrap_or_else(|_| "microphone".into());
         let channels = config.channels() as usize;
         let rate = config.sample_rate().0;
         let samples = Arc::new(Mutex::new(Vec::new()));
@@ -66,7 +69,14 @@ impl Recorder {
         }
         .map_err(|e| e.to_string())?;
         stream.play().map_err(|e| e.to_string())?;
-        Ok(Recorder { _stream: stream, samples, rate })
+        Ok(Recorder { _stream: stream, samples, rate, device: name })
+    }
+
+    /// Loudest sample (0..1) in the last tenth of a second, for a level meter.
+    pub fn level(&self) -> f32 {
+        let s = self.samples.lock().unwrap();
+        let n = (self.rate as usize / 10).min(s.len());
+        s[s.len() - n..].iter().fold(0.0, |m, x| m.max(x.abs()))
     }
 
     /// Stops recording and returns 16 kHz mono audio for Whisper.
@@ -106,6 +116,31 @@ fn resample_16k(input: &[f32], rate: u32) -> Vec<f32> {
             a + (b - a) * frac
         })
         .collect()
+}
+
+/// The default microphone's name, if there is one.
+pub fn input_name() -> Option<String> {
+    cpal::default_host().default_input_device().and_then(|d| d.name().ok())
+}
+
+/// How loud a recording is: (peak, rms), both 0..1.
+pub fn loudness(audio: &[f32]) -> (f32, f32) {
+    let peak = audio.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let rms = (audio.iter().map(|x| x * x).sum::<f32>() / audio.len().max(1) as f32).sqrt();
+    (peak, rms)
+}
+
+/// Plays a WAV file on the default speakers without waiting (an empty path stops playback).
+pub fn play_wav(path: &Path) {
+    use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_FILENAME, SND_NODEFAULT};
+    let wide: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain([0]).collect();
+    unsafe {
+        if path.as_os_str().is_empty() {
+            PlaySoundW(std::ptr::null(), std::ptr::null_mut(), 0);
+        } else {
+            PlaySoundW(wide.as_ptr(), std::ptr::null_mut(), SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+        }
+    }
 }
 
 pub fn transcribe(model: &Path, audio: &[f32], language: &str) -> Result<String, String> {

@@ -16,7 +16,9 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   Double-click a day or a time slot to create an item there.
 - **Quick add.** Type (or say) things like `leg day tomorrow 6pm for 1h every mon and thu #workout`.
   A live preview shows how it was understood. Parsing is done offline and is free.
-- **Voice.** Uses local Whisper (whisper.cpp). Audio never leaves the PC.
+- **Voice.** Uses local Whisper (whisper.cpp). Audio never leaves the PC. If dictation comes out wrong
+  (or as "[Music]"), use **Settings > Input & voice > Microphone test**: it records a few seconds
+  with a live level meter, says whether anything came through, plays it back and transcribes it.
 - **Import from AI tools.** Paste JSON from ChatGPT, Claude, Gemini and so on, or drop `.json` files into the
   `inbox` folder. **Import → "Copy AI instructions + my current plan"** gives the AI the format
   and your current items. See [IMPORT_FORMAT.md](IMPORT_FORMAT.md).

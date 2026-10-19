@@ -91,7 +91,25 @@ pub struct SettingsPage {
     push_test: Option<Receiver<Result<(), String>>>,
     #[cfg(feature = "voice")]
     download: Option<(std::sync::Arc<std::sync::Mutex<f32>>, Receiver<Result<(), String>>)>,
+    #[cfg(feature = "voice")]
+    mic: MicTest,
 }
+
+/// Settings > Input & voice: record a few seconds, see the level, play it back, transcribe it.
+#[cfg(feature = "voice")]
+#[derive(Default)]
+struct MicTest {
+    recording: Option<(crate::voice::Recorder, std::time::Instant)>,
+    /// The last test: 16 kHz mono audio and the microphone it came from.
+    take: Option<(Vec<f32>, String)>,
+    error: Option<String>,
+    transcribing: Option<Receiver<Result<String, String>>>,
+    heard: Option<Result<String, String>>,
+}
+
+/// Longest microphone test, in seconds.
+#[cfg(feature = "voice")]
+const MIC_TEST_SECS: u64 = 10;
 
 impl SettingsPage {
     pub fn open(data: &Data) -> Self {
@@ -114,6 +132,8 @@ impl SettingsPage {
             push_test: None,
             #[cfg(feature = "voice")]
             download: None,
+            #[cfg(feature = "voice")]
+            mic: MicTest::default(),
         }
     }
 
@@ -611,6 +631,117 @@ impl SettingsPage {
         }
         if let Some((m, false)) = &self.message {
             ui.label(RichText::new(m).color(err_color()));
+        }
+        self.mic_test(ui, data);
+    }
+
+    /// Stops a running microphone test (when leaving the Settings tab).
+    #[cfg(feature = "voice")]
+    pub fn stop_mic_test(&mut self) {
+        if let Some((rec, _)) = self.mic.recording.take() {
+            let device = rec.device.clone();
+            self.mic.take = Some((rec.finish(), device));
+        }
+    }
+
+    #[cfg(feature = "voice")]
+    fn mic_test(&mut self, ui: &mut Ui, data: &mut Data) {
+        subheading(ui, "Microphone test");
+        note(ui, "Record a few seconds and play them back to check that your microphone works and isn't muted.");
+        let wav = std::env::temp_dir().join("morrowkeep-mic-test.wav");
+        let mut stop = false;
+        if let Some((rec, started)) = &self.mic.recording {
+            let secs = started.elapsed().as_secs();
+            ui.label(format!("Recording from {}…", rec.device));
+            ui.horizontal(|ui| {
+                let level = rec.level();
+                ui.add(egui::ProgressBar::new(level.sqrt()).desired_width(260.0).fill(if level < 0.002 { err_color() } else { ok_color() }))
+                    .on_hover_text("Live input level. It should jump when you talk.");
+                stop = ui.button(format!("■ Stop ({}s)", MIC_TEST_SECS.saturating_sub(secs))).clicked() || secs >= MIC_TEST_SECS;
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        } else {
+            ui.horizontal(|ui| {
+                match crate::voice::input_name() {
+                    Some(name) => ui.label(format!("Microphone: {name}")),
+                    None => ui.label(RichText::new("No microphone found").color(err_color())),
+                };
+                if ui.button("🎤 Record a test").on_hover_text(format!("Records up to {MIC_TEST_SECS} seconds")).clicked() {
+                    crate::voice::play_wav(std::path::Path::new(""));
+                    match crate::voice::Recorder::start() {
+                        Ok(r) => self.mic = MicTest { recording: Some((r, std::time::Instant::now())), ..Default::default() },
+                        Err(e) => self.mic.error = Some(e),
+                    }
+                }
+                if ui.button("Windows sound settings").on_hover_text("Pick the input device and check its level").clicked() {
+                    let _ = open::that("ms-settings:sound");
+                }
+            });
+        }
+        if stop {
+            self.stop_mic_test();
+        }
+        if let Some(e) = &self.mic.error {
+            ui.label(RichText::new(format!("Couldn't record: {e}")).color(err_color()));
+        }
+        let Some((audio, device)) = &self.mic.take else { return };
+        let (peak, _) = crate::voice::loudness(audio);
+        let secs = audio.len() as f32 / 16_000.0;
+        let (verdict, good) = if peak < 0.002 {
+            (format!("Silent: nothing came through from {device}. Check that it's plugged into the microphone jack and not muted, or pick another input in Windows sound settings."), false)
+        } else if peak < 0.05 {
+            (format!("Very quiet (loudest {:.1}%). Move closer, or turn up the input volume in Windows sound settings.", peak * 100.0), false)
+        } else if peak >= 0.98 {
+            ("✔ Sound came through, but it hit the maximum, so loud parts may be distorted. Turn the input volume down a little if transcripts come out wrong.".to_string(), true)
+        } else {
+            (format!("✔ Sound came through (loudest {:.0}%).", peak * 100.0), true)
+        };
+        ui.label(RichText::new(verdict).color(if good { ok_color() } else { err_color() }));
+        let audio = audio.clone();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{secs:.1} s recorded")).weak());
+            if ui.button("▶ Play back").clicked() {
+                match crate::journal::write_wav(&wav, &audio) {
+                    Ok(()) => crate::voice::play_wav(&wav),
+                    Err(e) => self.mic.error = Some(e),
+                }
+            }
+            if ui.button("■ Stop playback").clicked() {
+                crate::voice::play_wav(std::path::Path::new(""));
+            }
+            let model = data.paths.models.join(&data.settings.whisper_model);
+            let busy = self.mic.transcribing.is_some();
+            if ui.add_enabled(model.exists() && !busy, egui::Button::new("Transcribe")).on_disabled_hover_text("Needs the voice model").clicked() {
+                let (tx, rx) = mpsc::channel();
+                let (lang, ctx) = (data.settings.voice_language.clone(), ui.ctx().clone());
+                std::thread::spawn(move || {
+                    let _ = tx.send(crate::voice::transcribe(&model, &audio, &lang));
+                    ctx.request_repaint();
+                });
+                self.mic.transcribing = Some(rx);
+                self.mic.heard = None;
+            }
+            if busy {
+                ui.spinner();
+            }
+        });
+        if let Some(rx) = &self.mic.transcribing {
+            if let Ok(r) = rx.try_recv() {
+                self.mic.heard = Some(r);
+                self.mic.transcribing = None;
+            }
+        }
+        match &self.mic.heard {
+            Some(Ok(t)) if !crate::journal::clean_transcript(t).is_empty() => {
+                ui.label(format!("Heard: \u{201c}{}\u{201d}", crate::journal::clean_transcript(t)));
+            }
+            Some(Ok(_)) => {
+                ui.label(RichText::new("Heard nothing.").weak());
+            }
+            Some(Err(e)) => {
+                ui.label(RichText::new(format!("Transcribing failed: {e}")).color(err_color()));
+            }
+            None => {}
         }
     }
 
