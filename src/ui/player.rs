@@ -33,6 +33,8 @@ pub struct Player {
     /// Ran off the end: save on the next frame (where the data is at hand).
     pending_save: bool,
     confirm_end: bool,
+    /// The how-to side panel is open.
+    pub show_how_to: bool,
 }
 
 fn beep(freq: u32, ms: u32) {
@@ -66,6 +68,7 @@ impl Player {
             finished: None,
             pending_save: false,
             confirm_end: false,
+            show_how_to: true,
         };
         p.enter_step();
         beep(880, 180);
@@ -167,6 +170,18 @@ impl Player {
     }
 
     /// Draws the player. Returns false when it should close.
+    /// The exercise to explain: the current one, or during a rest the next one (true = upcoming).
+    pub fn how_to_exercise(&self) -> Option<(String, bool)> {
+        self.steps[self.idx..].iter().enumerate().find_map(|(k, s)| match s {
+            Step::Set { exercise, .. } => Some((exercise.clone(), k > 0)),
+            Step::Rest { .. } => None,
+        })
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished.is_some()
+    }
+
     pub fn show(&mut self, ui: &mut Ui, data: &mut Data) -> bool {
         if self.pending_save {
             self.pending_save = false;
@@ -183,6 +198,9 @@ impl Player {
         // keyboard: Space pauses, Enter finishes the set
         if ui.input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input() {
             self.toggle_pause();
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::H)) && !ui.ctx().wants_keyboard_input() {
+            self.show_how_to = !self.show_how_to;
         }
         if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !ui.ctx().wants_keyboard_input() {
             self.next();
@@ -225,8 +243,13 @@ impl Player {
                             self.finish(data, false);
                         }
                         ui.label(RichText::new("End the workout?").color(t.status.warning));
-                    } else if ui.button("End workout").clicked() {
-                        self.confirm_end = true;
+                    } else {
+                        if ui.button("End workout").clicked() {
+                            self.confirm_end = true;
+                        }
+                        if !self.show_how_to && ui.button("📖 How to").on_hover_text("Show how to do the exercise (H)").clicked() {
+                            self.show_how_to = true;
+                        }
                     }
                 });
             });
@@ -331,7 +354,7 @@ impl Player {
                         }
                     }
                 });
-                if let Some(tip) = lib.iter().find(|e| e.id == *exercise).and_then(|e| e.form.first()) {
+                if let Some(tip) = lib.iter().find(|e| e.id == *exercise).and_then(|e| e.form.first()).filter(|_| !self.show_how_to) {
                     ui.add_space(6.0);
                     ui.label(RichText::new(tip).italics().color(t.text.muted));
                 }

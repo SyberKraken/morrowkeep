@@ -129,6 +129,8 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
     on by themselves; sets with only reps wait for **Done set**. It beeps when moving on and
     in the last 3 seconds. Space pauses, Enter marks a set done; you can go back, skip, and
     adjust the reps/kg you actually did.
+    A side panel shows how to do the exercise (steps, good form, mistakes, muscle map), and
+    during a break the one coming up; hide it with **Hide** or H.
   - **History:** every session with its sets, and on each exercise page your last time, best,
     and a progress chart.
 - **Settings tab.** A full page with sections on the left (General, Appearance, Categories,

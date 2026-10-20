@@ -17,6 +17,8 @@ enum Section {
 
 pub struct WorkoutsUi {
     section: Section,
+    /// The player's how-to panel was hidden (kept for the next workout).
+    hide_how_to: bool,
     search: String,
     equipment: Vec<String>,
     muscle: Option<String>,
@@ -40,7 +42,7 @@ pub struct WorkoutsUi {
 
 impl Default for WorkoutsUi {
     fn default() -> Self {
-        WorkoutsUi { section: Section::Exercises, search: String::new(), equipment: Vec::new(), muscle: None, selected: None, editing: false, confirm_delete: false, workout: None, add_search: String::new(), player: None, session: None, filling: None, build_text: String::new(), build_request: String::new(), building: None, built: None }
+        WorkoutsUi { section: Section::Exercises, hide_how_to: false, search: String::new(), equipment: Vec::new(), muscle: None, selected: None, editing: false, confirm_delete: false, workout: None, add_search: String::new(), player: None, session: None, filling: None, build_text: String::new(), build_request: String::new(), building: None, built: None }
     }
 }
 
@@ -57,7 +59,11 @@ impl WorkoutsUi {
         self.poll_claude(ctx, data);
         if let Some(p) = &mut self.player {
             let mut keep = true;
+            if p.show_how_to && !p.is_finished() {
+                player_how_to(ctx, p, &data.exercises.exercises);
+            }
             egui::CentralPanel::default().show(ctx, |ui| keep = p.show(ui, data));
+            self.hide_how_to = !p.show_how_to;
             if !keep {
                 self.player = None;
             }
@@ -224,28 +230,7 @@ impl WorkoutsUi {
                 ui.set_width(text_w);
                 theme::card().show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    let section = |ui: &mut Ui, title: &str, lines: &[String], numbered: bool| {
-                        if lines.is_empty() {
-                            return;
-                        }
-                        ui.label(RichText::new(title).size(12.0).color(t.text.muted));
-                        for (k, l) in lines.iter().enumerate() {
-                            let text = if numbered { format!("{}. {l}", k + 1) } else { format!("•  {l}") };
-                            ui.add(egui::Label::new(text).wrap());
-                        }
-                        ui.add_space(6.0);
-                    };
-                    section(ui, "HOW TO DO IT", &e.steps, true);
-                    section(ui, "GOOD FORM", &e.form, false);
-                    section(ui, "COMMON MISTAKES", &e.mistakes, false);
-                    if !e.easier.is_empty() || !e.harder.is_empty() {
-                        ui.label(RichText::new("EASIER · HARDER").size(12.0).color(t.text.muted));
-                        ui.label(format!("{}  ·  {}", if e.easier.is_empty() { "–" } else { &e.easier }, if e.harder.is_empty() { "–" } else { &e.harder }));
-                    }
-                    if !e.notes.is_empty() {
-                        ui.add_space(6.0);
-                        ui.label(RichText::new(&e.notes).italics());
-                    }
+                    how_to(ui, &e);
                 });
             });
             theme::card().show(ui, |ui| {
@@ -382,6 +367,58 @@ impl WorkoutsUi {
             self.start_fill(data, &eid, &ename);
         }
     }
+}
+
+/// Steps, good form, common mistakes, easier/harder and notes for an exercise.
+fn how_to(ui: &mut Ui, e: &Exercise) {
+    let t = theme::th();
+    let section = |ui: &mut Ui, title: &str, lines: &[String], numbered: bool| {
+        if lines.is_empty() {
+            return;
+        }
+        ui.label(RichText::new(title).size(12.0).color(t.text.muted));
+        for (k, l) in lines.iter().enumerate() {
+            let text = if numbered { format!("{}. {l}", k + 1) } else { format!("•  {l}") };
+            ui.add(egui::Label::new(text).wrap());
+        }
+        ui.add_space(6.0);
+    };
+    section(ui, "HOW TO DO IT", &e.steps, true);
+    section(ui, "GOOD FORM", &e.form, false);
+    section(ui, "COMMON MISTAKES", &e.mistakes, false);
+    if !e.easier.is_empty() || !e.harder.is_empty() {
+        ui.label(RichText::new("EASIER · HARDER").size(12.0).color(t.text.muted));
+        ui.add(egui::Label::new(format!("{}  ·  {}", if e.easier.is_empty() { "–" } else { &e.easier }, if e.harder.is_empty() { "–" } else { &e.harder })).wrap());
+    }
+    if !e.notes.is_empty() {
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(RichText::new(&e.notes).italics()).wrap());
+    }
+}
+
+/// The player's side panel: how to do the current exercise (or, during a rest, the next one).
+fn player_how_to(ctx: &egui::Context, p: &mut super::player::Player, lib: &[Exercise]) {
+    let Some((id, upcoming)) = p.how_to_exercise() else { return };
+    let Some(e) = lib.iter().find(|e| e.id == id) else { return };
+    let t = theme::th();
+    egui::SidePanel::right("player_how_to").resizable(true).default_width(360.0).width_range(260.0..=560.0).show(ctx, |ui| {
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(if upcoming { "UP NEXT" } else { "NOW" }).size(12.0).color(t.text.muted));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Hide ›").on_hover_text("Hide the how-to (H)").clicked() {
+                    p.show_how_to = false;
+                }
+            });
+        });
+        ui.label(RichText::new(&e.name).font(theme::bold(20.0)));
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.vertical_centered(|ui| muscle_map(ui, e));
+            ui.add_space(6.0);
+            how_to(ui, e);
+        });
+    });
 }
 
 /// Front and back outline with the worked muscles colored (main strong, helping light).
@@ -728,7 +765,9 @@ impl WorkoutsUi {
 
 impl WorkoutsUi {
     fn start_player(&mut self, data: &mut Data, wi: usize) {
-        self.player = Some(super::player::Player::new(&data.workouts.workouts[wi], &data.exercises.exercises));
+        let mut p = super::player::Player::new(&data.workouts.workouts[wi], &data.exercises.exercises);
+        p.show_how_to = !self.hide_how_to;
+        self.player = Some(p);
     }
 }
 
