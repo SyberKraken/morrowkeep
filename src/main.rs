@@ -7,6 +7,7 @@ mod claude;
 mod foods;
 mod gcal;
 mod journal;
+mod label;
 mod import;
 mod model;
 mod notify;

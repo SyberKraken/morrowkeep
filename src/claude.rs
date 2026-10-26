@@ -60,8 +60,31 @@ pub fn find_cli(settings: &Settings) -> Option<PathBuf> {
 /// Runs one headless request and returns Claude's text answer.
 /// Blocking; call from a background thread.
 pub fn ask(cli: &Path, model: &str, prompt: &str, workdir: &Path) -> Result<String, String> {
-    let mut child = Command::new(cli)
-        .args(["-p", "--output-format", "json", "--model", model])
+    run(cli, model, prompt.to_string(), workdir, false)
+}
+
+/// Like `ask`, with a JPEG image (e.g. a photo of a nutrition label) sent along with the text.
+/// The image goes over stdin as a stream-json message, so Claude needs no file access.
+pub fn ask_image(cli: &Path, model: &str, prompt: &str, jpeg: &[u8], workdir: &Path) -> Result<String, String> {
+    use base64::Engine;
+    let message = serde_json::json!({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64::engine::general_purpose::STANDARD.encode(jpeg)}},
+            {"type": "text", "text": prompt},
+        ]},
+    });
+    run(cli, model, format!("{message}\n"), workdir, true)
+}
+
+fn run(cli: &Path, model: &str, input: String, workdir: &Path, stream: bool) -> Result<String, String> {
+    let format = if stream { "stream-json" } else { "json" };
+    let mut command = Command::new(cli);
+    command.args(["-p", "--output-format", format, "--model", model]);
+    if stream {
+        command.args(["--input-format", "stream-json", "--verbose"]);
+    }
+    let mut child = command
         // keep requests small and side-effect free: no tools, no MCP servers, no user/project
         // settings or CLAUDE.md, and no saved session
         .args(["--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"])
@@ -76,9 +99,8 @@ pub fn ask(cli: &Path, model: &str, prompt: &str, workdir: &Path) -> Result<Stri
 
     // The prompt goes over stdin: it can be longer than Windows allows on a command line.
     let mut stdin = child.stdin.take().unwrap();
-    let prompt = prompt.to_string();
     std::thread::spawn(move || {
-        let _ = stdin.write_all(prompt.as_bytes());
+        let _ = stdin.write_all(input.as_bytes());
     });
     let mut stdout = child.stdout.take().unwrap();
     let reader = std::thread::spawn(move || {
@@ -108,6 +130,8 @@ pub fn ask(cli: &Path, model: &str, prompt: &str, workdir: &Path) -> Result<Stri
     let out = reader.join().unwrap_or_default();
     let err = err_reader.join().unwrap_or_default();
 
+    // stream-json: one JSON object per line; the answer is the "result" one
+    let out = if stream { out.lines().rev().find(|l| serde_json::from_str::<serde_json::Value>(l).is_ok_and(|v| v["type"] == "result")).unwrap_or("").to_string() } else { out };
     let v: serde_json::Value = serde_json::from_str(out.trim()).map_err(|_| {
         let msg = if err.trim().is_empty() { out.trim() } else { err.trim() };
         format!("Unexpected output from Claude Code: {}", msg.chars().take(300).collect::<String>())

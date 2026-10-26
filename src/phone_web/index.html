@@ -66,6 +66,9 @@ nav button.on { color: var(--text); }
 #queue { color: var(--warning); font-size: 13px; }
 .hidden { display: none !important; }
 .center { text-align: center; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.lbl { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.lbl input { width: 100%; box-sizing: border-box; }
 </style>
 </head>
 <body>
@@ -77,6 +80,7 @@ nav button.on { color: var(--text); }
   <button data-tab="ask"><span class="ic">✦</span>Ask</button>
 </nav>
 <div id="toast"></div>
+<input type="file" id="labelFile" accept="image/*" capture="environment" hidden>
 <script src="/app.js"></script>
 </body>
 </html>

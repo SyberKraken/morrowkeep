@@ -87,7 +87,12 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   ("1 jar = 250 g") and optional protein, carbs and fat, plus aliases ("quark" for kvarg).
   Build **meals** from them: ingredient weights, how many servings it makes, and optionally the
   cooked weight, so "300 g chili" is exact. Per-serving and per-100 g numbers update as you edit.
-  **✨ Estimate with Claude** fills in a new ingredient from its name. Then log by amount anywhere:
+  **✨ Estimate with Claude** fills in a new ingredient from its name.
+  **📷 From label** (or drop a photo on the Foods tab, or **Scan** on the phone) reads a photo of a
+  nutrition label, Swedish or English: Claude takes the per-100 g column (converting kJ or a
+  per-portion column if that's all there is), the product name and the portion size, and makes
+  the ingredient for you to check. The photo is kept (`label-photos\`) and opens from the food's
+  page with **📷 Label photo**. Then log by amount anywhere:
   - on the food's page (servings or grams);
   - in the entry bar: `1 serving of kvarg`, `2 jars of kvarg`, `200 g chili`, `had half a portion
     of chili`, `kvarg x2`;
@@ -154,7 +159,7 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
 ## Phone app (through Tailscale)
 
 Morrowkeep can serve a small app for your phone: log weight, calories (your food library,
-Claude estimates or a number), journal entries (typed or recorded; the recording is
+Claude estimates, a number, or a photo of a nutrition label), journal entries (typed or recorded; the recording is
 transcribed by Whisper on your PC), tick off today's tasks and ask Claude, all from the phone.
 It's the same data as the desktop app, and it uses your desktop theme.
 
@@ -219,6 +224,7 @@ LLVM (see the comment in `Cargo.toml`).
 | `weight.json` | Weight log, one entry per day. |
 | `journal.json` | Journal entries (text, mood, transcripts). |
 | `foods.json` | Food library: ingredients and meals. |
+| `label-photos/` | Nutrition label photos that foods were read from (named by food id). |
 | `journal-audio/` | Journal voice recordings (WAV). |
 | `settings.json` | Settings, including your categories and color choices. Editable on the Settings tab. |
 | `exercises.json`, `workouts.json` | Exercise library and your workouts (built-ins merge in unless you edited or deleted them). |

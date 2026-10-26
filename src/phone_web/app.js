@@ -11,6 +11,8 @@ const S = {
   journal: { text: "", mood: null, day: "today", date: "" },
   food: { q: "", sel: null, amount: 1, grams: false, free: "", kcal: "", what: "" },
   ask: { text: "", job: null, food: false, status: null, reply: null, started: 0, error: "" },
+  // a nutrition label photo: null, "reading", "review" or "error"
+  label: { stage: null, job: null, food: null, note: "", error: "" },
   weight: "",
   rec: null,
   pendingAudio: null,
@@ -322,6 +324,93 @@ function foodKcal(f, amount, grams) {
   return Math.ceil(f.kcal_100g * g / 100 - 0.001);
 }
 
+// ---------------------------------------------------------------- nutrition label photos
+
+const LABEL_FIELDS = [
+  ["name", "Name", "text"], ["kcal_per_100g", "kcal / 100 g", "num"], ["protein_per_100g", "protein g", "num"],
+  ["carbs_per_100g", "carbs g", "num"], ["fat_per_100g", "fat g", "num"], ["serving_name", "1 serving is a…", "text"], ["serving_g", "serving g", "num"],
+];
+
+function labelCardHtml(st) {
+  const L = S.label;
+  if (!st.claude) return "";
+  if (L.stage === "reading") return `<div class="card"><h3>📷 Nutrition label</h3><p class="muted">Claude is reading the label on your PC…</p></div>`;
+  if (L.stage === "error") return `<div class="card"><h3>📷 Nutrition label</h3><div class="error">${esc(L.error)}</div>
+    <div class="row" style="margin-top:8px"><button class="grow" data-act="scanlabel">Take another photo</button><button data-act="labeldiscard">Close</button></div></div>`;
+  if (L.stage === "review") {
+    const f = L.food;
+    const field = ([k, label, kind]) => `<label class="lbl"><span class="muted">${label}</span><input id="lb_${k}" ${kind === "num" ? 'inputmode="decimal"' : ""} value="${esc(f[k] ?? "")}"></label>`;
+    return `<div class="card"><h3>📷 Check the numbers</h3>
+      ${L.note ? `<p class="muted" style="color:var(--claude)">Claude: ${esc(L.note)}</p>` : ""}
+      ${field(LABEL_FIELDS[0])}
+      <div class="grid2">${LABEL_FIELDS.slice(1).map(field).join("")}</div>
+      <div class="row" style="margin-top:10px"><button class="primary grow" data-act="labelsave">Save to my foods</button><button data-act="labelsavelog">Save + log 1</button></div>
+      <div class="row" style="margin-top:6px"><button class="small" data-act="labeldiscard">Discard</button></div></div>`;
+  }
+  return `<div class="card"><div class="row"><div class="grow"><b>📷 Scan a nutrition label</b><div class="muted">Swedish or English. Claude reads it and you check it before it's saved.</div></div>
+    <button data-act="scanlabel">Scan</button></div></div>`;
+}
+
+/// Shrinks a photo to at most 1568 px (what Claude reads anyway) as JPEG, upright.
+async function labelJpeg(file) {
+  const img = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const k = Math.min(1, 1568 / Math.max(img.width, img.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.width * k);
+  c.height = Math.round(img.height * k);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  return new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.85));
+}
+
+async function uploadLabel(file) {
+  const L = S.label;
+  Object.assign(L, { stage: "reading", job: null, food: null, note: "", error: "" });
+  rerender();
+  try {
+    const jpeg = await labelJpeg(file);
+    const r = await api("/api/food/label", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: jpeg });
+    L.job = r.job;
+    pollLabel(r.job);
+  } catch (e) {
+    Object.assign(L, { stage: "error", error: e.server ? e.message : "Your PC isn't reachable right now. Try again when it's on." });
+    rerender();
+  }
+}
+
+async function pollLabel(job) {
+  const L = S.label;
+  if (L.job !== job || L.stage !== "reading") return;
+  try {
+    const r = await api("/api/food/label?job=" + encodeURIComponent(job));
+    if (L.job !== job) return;
+    if (!r.done) return void setTimeout(() => pollLabel(job), 1500);
+    if (r.error) Object.assign(L, { stage: "error", error: r.error });
+    else Object.assign(L, { stage: "review", food: r.food, note: r.note || "" });
+  } catch (e) {
+    Object.assign(L, { stage: "error", error: e.message });
+  }
+  rerender();
+}
+
+async function saveLabel(andLog) {
+  const L = S.label, f = L.food;
+  const body = { job: L.job };
+  for (const [k, , kind] of LABEL_FIELDS) {
+    const v = String(f[k] ?? "").trim();
+    body[k] = kind === "num" ? (v === "" ? null : parseFloat(v.replace(",", "."))) : v;
+  }
+  try {
+    const r = await post("/api/food/new", body);
+    Object.assign(L, { stage: null, job: null, food: null, note: "" });
+    if (andLog) await send("/api/food", { id: r.id, servings: 1 });
+    else { toast(r.message); await refresh(); }
+    Object.assign(S.food, { sel: r.id, amount: 1, grams: false });
+  } catch (e) {
+    toast(e.server ? e.message : "Your PC isn't reachable right now.", 4000);
+  }
+  rerender();
+}
+
 function renderFood(st) {
   const F = S.food;
   const foods = st.foods;
@@ -346,7 +435,7 @@ function renderFood(st) {
       <button class="primary grow" data-act="logfood">Log ${foodKcal(sel, F.amount, F.grams)} kcal</button></div></div>`;
   }
   const askBox = S.ask.food && (S.ask.job || S.ask.reply || S.ask.error) ? askPreviewHtml() : "";
-  return headerHtml() + `
+  return headerHtml() + labelCardHtml(st) + `
     <div class="card"><h3>Your foods</h3>
       <input id="foodQ" placeholder="Search your foods…" value="${esc(F.q)}" autocomplete="off">
       <div class="chips" style="margin-top:10px">${list.map((f) => `<button class="chip" data-act="selfood" data-id="${esc(f.id)}" style="${F.sel === f.id ? "border-color:var(--accent)" : ""}">${esc(f.name)} · ${f.kcal_serving}</button>`).join("") ||
@@ -597,6 +686,7 @@ document.addEventListener("input", (e) => {
   else if (t.id === "freeFood") S.food.free = t.value;
   else if (t.id === "kcalIn") S.food.kcal = t.value;
   else if (t.id === "kcalWhat") S.food.what = t.value;
+  else if (t.id.startsWith("lb_") && S.label.food) S.label.food[t.id.slice(3)] = t.value;
   else if (t.id === "foodQ") {
     S.food.q = t.value;
     // keep typing in the search box while the list updates
@@ -610,6 +700,7 @@ document.addEventListener("input", (e) => {
 
 document.addEventListener("change", (e) => {
   if (e.target.id === "jday") { S.journal.day = e.target.value; rerender(); }
+  if (e.target.id === "labelFile" && e.target.files[0]) { const f = e.target.files[0]; e.target.value = ""; uploadLabel(f); }
 });
 
 document.addEventListener("click", async (e) => {
@@ -652,6 +743,14 @@ document.addEventListener("click", async (e) => {
       return send("/api/task/toggle", { id: el.dataset.id }, t && t.done ? `✔ ${t.title}` : "Un-ticked");
     }
     case "delcal": return send("/api/calories/delete", { id: el.dataset.id }, "Removed");
+    case "scanlabel": return $("#labelFile").click();
+    case "labelsave": return saveLabel(false);
+    case "labelsavelog": return saveLabel(true);
+    case "labeldiscard": {
+      if (S.label.job) post("/api/food/label/discard", { job: S.label.job }).catch(() => {});
+      Object.assign(S.label, { stage: null, job: null, food: null, note: "", error: "" });
+      return rerender();
+    }
     case "selfood": {
       const id = el.dataset.id;
       Object.assign(S.food, S.food.sel === id ? { sel: null } : { sel: id, amount: 1, grams: false });

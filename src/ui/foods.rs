@@ -30,6 +30,10 @@ pub struct FoodsUi {
     add_search: String,
     /// Claude estimating an ingredient: (food id, reply).
     estimating: Option<(String, Receiver<Result<String, String>>)>,
+    /// Claude reading a label photo.
+    reading: Option<Receiver<Result<crate::label::LabelFood, String>>>,
+    /// What Claude was unsure about on the last label: (food id, note).
+    label_note: Option<(String, String)>,
 }
 
 impl Default for FoodsUi {
@@ -44,6 +48,8 @@ impl Default for FoodsUi {
             aliases: None,
             add_search: String::new(),
             estimating: None,
+            reading: None,
+            label_note: None,
         }
     }
 }
@@ -86,6 +92,24 @@ fn per_serving(p: &Portionable) -> String {
 impl FoodsUi {
     /// Finishes a running Claude estimate (called every frame on every tab).
     pub fn poll(&mut self, data: &mut Data) {
+        if let Some(rx) = &self.reading {
+            if let Ok(res) = rx.try_recv() {
+                self.reading = None;
+                match res {
+                    Ok(label) => {
+                        let id = label.food.id.clone();
+                        data.status = format!("Read from the label: {}. Check the numbers against the photo.", label.food.name);
+                        data.foods.foods.push(label.food);
+                        data.save_foods();
+                        self.select(Some(id.clone()), data);
+                        if !label.note.is_empty() {
+                            self.label_note = Some((id, label.note));
+                        }
+                    }
+                    Err(e) => data.status = e,
+                }
+            }
+        }
         let Some((id, rx)) = &self.estimating else { return };
         let Ok(res) = rx.try_recv() else { return };
         let id = id.clone();
@@ -113,14 +137,29 @@ impl FoodsUi {
     }
 
     pub fn page(&mut self, ctx: &egui::Context, data: &mut Data) {
-        if self.estimating.is_some() {
+        if self.estimating.is_some() || self.reading.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(300));
+        }
+        // a label photo dropped onto the window
+        let dropped: Option<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).find(|p| is_photo(p)));
+        if let Some(path) = dropped {
+            self.read_label(data, &path);
         }
         egui::SidePanel::left("foods_side").resizable(false).exact_width(320.0).show(ctx, |ui| self.sidebar(ui, data));
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_max_width(820.0);
                 ui.add_space(10.0);
+                if self.reading.is_some() {
+                    theme::card().show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(RichText::new("Claude is reading the label…").color(claude_color()));
+                        });
+                    });
+                    ui.add_space(8.0);
+                }
                 let sel = self.selected.clone();
                 if let Some(i) = sel.as_ref().and_then(|id| data.foods.foods.iter().position(|f| f.id == *id)) {
                     self.food_editor(ui, data, i);
@@ -158,6 +197,16 @@ impl FoodsUi {
                 data.foods.foods.push(food);
                 data.save_foods();
                 self.select(Some(id), data);
+            }
+            if ui
+                .add_enabled(self.reading.is_none(), egui::Button::new(RichText::new("📷 From label").color(claude_color())))
+                .on_hover_text("Pick a photo of a nutrition label (Swedish or English) and Claude makes an ingredient from it. You can also drop a photo onto this page.")
+                .clicked()
+            {
+                let file = rfd::FileDialog::new().set_title("Photo of a nutrition label").add_filter("Photos", crate::label::EXTENSIONS).pick_file();
+                if let Some(path) = file {
+                    self.read_label(data, &path);
+                }
             }
             if ui.button("+ Meal").clicked() {
                 let meal = Meal { id: uuid::Uuid::new_v4().to_string(), name: "New meal".into(), servings: 1.0, ..Default::default() };
@@ -233,6 +282,7 @@ impl FoodsUi {
             "\"add 1 serving of kvarg to my calorie count\": in Claude mode; Claude uses your library's numbers",
             "the \"From your foods\" picker on the Habits calorie card",
             "the Log box on each food here",
+            "\"📷 From label\" (or drop a photo here, or scan one on your phone): Claude reads a nutrition label and makes the ingredient",
         ] {
             ui.label(format!("•  {ex}"));
         }
@@ -314,8 +364,15 @@ impl FoodsUi {
                 ui.end_row();
             });
             ui.add_space(4.0);
+            if let Some((_, note)) = self.label_note.as_ref().filter(|(id, _)| *id == f.id) {
+                ui.label(RichText::new(format!("Claude: {note}")).italics().color(claude_color()));
+            }
             let busy = self.estimating.as_ref().is_some_and(|(id, _)| *id == f.id);
+            let photo = crate::label::photo_path(&data.paths.root, &f.id);
             ui.horizontal(|ui| {
+                if photo.exists() && ui.button("📷 Label photo").on_hover_text("Open the photo these numbers were read from").clicked() {
+                    let _ = open::that(&photo);
+                }
                 if busy {
                     ui.spinner();
                     ui.label("Claude is estimating…");
@@ -343,6 +400,28 @@ impl FoodsUi {
         ui.add_space(10.0);
         let p = data.foods.foods[i].portionable();
         self.log_box(ui, data, &p);
+    }
+
+    /// Starts Claude reading a label photo from disk.
+    fn read_label(&mut self, data: &mut Data, path: &std::path::Path) {
+        if self.reading.is_some() {
+            return;
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                data.status = format!("Couldn't open the photo: {e}");
+                return;
+            }
+        };
+        let (settings, root) = (data.settings.clone(), data.paths.root.clone());
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::label::read_photo(&settings, &root, &bytes));
+        });
+        self.reading = Some(rx);
+        self.select(None, data);
+        data.status = "Claude is reading the label…".into();
     }
 
     fn estimate(&mut self, root: std::path::PathBuf, settings: &crate::store::Settings, id: String, name: String) {
@@ -581,6 +660,10 @@ impl FoodsUi {
             }
         });
     }
+}
+
+fn is_photo(p: &std::path::Path) -> bool {
+    p.extension().and_then(|e| e.to_str()).is_some_and(|e| crate::label::EXTENSIONS.contains(&e.to_lowercase().as_str()))
 }
 
 fn data_paths(paths: &crate::store::Paths) -> std::path::PathBuf {

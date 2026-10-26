@@ -58,6 +58,16 @@ static STATUS: Mutex<String> = Mutex::new(String::new());
 static PAIR: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 static LAST_SEEN: Mutex<Option<HashMap<String, DateTime<Local>>>> = Mutex::new(None);
 static JOBS: Mutex<Option<HashMap<String, AskJob>>> = Mutex::new(None);
+
+/// A label photo being read for the phone: Claude's reading (once done) and the photo, kept
+/// until the food is saved.
+struct LabelJob {
+    rx: Option<Receiver<Result<crate::label::LabelFood, String>>>,
+    result: Option<Result<crate::label::LabelFood, String>>,
+    jpeg: Arc<Vec<u8>>,
+}
+
+static LABEL_JOBS: Mutex<Option<HashMap<String, LabelJob>>> = Mutex::new(None);
 static TRANSCRIBING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 fn sha(s: &str) -> String {
@@ -401,6 +411,83 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             d.calories.push(e);
             d.save_calories();
             done(&mut d, msg)
+        }
+
+        // a photo of a nutrition label (JPEG from the phone): Claude reads it in the background
+        (Method::Post, "/api/food/label") => {
+            let jpeg = Arc::new(crate::label::prepare(&body).map_err(bad)?);
+            let (settings, root) = {
+                let d = shared.lock().unwrap();
+                crate::claude::find_cli(&d.settings).ok_or_else(|| bad("Claude Code wasn't found on your PC"))?;
+                (d.settings.clone(), d.paths.root.clone())
+            };
+            let (tx, rx) = mpsc::channel();
+            let photo = jpeg.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::label::read(&settings, &root, &photo));
+            });
+            let id = uuid::Uuid::new_v4().simple().to_string();
+            LABEL_JOBS.lock().unwrap().get_or_insert_with(HashMap::new).insert(id.clone(), LabelJob { rx: Some(rx), result: None, jpeg });
+            Ok(json!({"job": id}))
+        }
+
+        (Method::Get, "/api/food/label") => {
+            let id = q.get("job").ok_or_else(|| bad("Missing job"))?;
+            let mut jobs = LABEL_JOBS.lock().unwrap();
+            let job = jobs.get_or_insert_with(HashMap::new).get_mut(id).ok_or_else(|| bad("That photo is gone; take it again"))?;
+            if let Some(rx) = &job.rx {
+                if let Ok(r) = rx.try_recv() {
+                    job.result = Some(r);
+                    job.rx = None;
+                }
+            }
+            match &job.result {
+                None => Ok(json!({"done": false})),
+                Some(Ok(l)) => {
+                    let f = &l.food;
+                    // one decimal, so 3.9 isn't sent as 3.9000000953674316
+                    let r1 = |x: f32| (x as f64 * 10.0).round() / 10.0;
+                    Ok(json!({"done": true, "note": l.note, "food": {"name": f.name, "kcal_per_100g": r1(f.kcal_per_100g), "protein_per_100g": f.protein_per_100g.map(r1),
+                        "carbs_per_100g": f.carbs_per_100g.map(r1), "fat_per_100g": f.fat_per_100g.map(r1), "serving_g": r1(f.serving_g), "serving_name": f.serving_name}}))
+                }
+                Some(Err(e)) => Ok(json!({"done": true, "error": e})),
+            }
+        }
+
+        // save a food (reviewed on the phone) to the library, with its label photo
+        (Method::Post, "/api/food/new") => {
+            let name = v["name"].as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("Give the food a name"))?;
+            let num = |k: &str, max: f64| v[k].as_f64().filter(|n| n.is_finite() && *n >= 0.0 && *n <= max).map(|n| n as f32);
+            let kcal = num("kcal_per_100g", 900.0).ok_or_else(|| bad("Calories per 100 g must be a number from 0 to 900"))?;
+            let food = crate::foods::Food {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: name.chars().take(60).collect(),
+                kcal_per_100g: kcal,
+                serving_g: num("serving_g", 5000.0).filter(|g| *g >= 1.0).unwrap_or(100.0),
+                serving_name: v["serving_name"].as_str().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).unwrap_or_else(|| "serving".into()),
+                protein_per_100g: num("protein_per_100g", 100.0),
+                carbs_per_100g: num("carbs_per_100g", 100.0),
+                fat_per_100g: num("fat_per_100g", 100.0),
+                ..Default::default()
+            };
+            let job = v["job"].as_str().and_then(|j| LABEL_JOBS.lock().unwrap().get_or_insert_with(HashMap::new).remove(j));
+            let mut d = shared.lock().unwrap();
+            if let Some(job) = job {
+                let _ = crate::label::save_photo(&d.paths.root, &food.id, &job.jpeg);
+            }
+            let (id, msg) = (food.id.clone(), format!("{} added to your foods", food.name));
+            d.foods.foods.push(food);
+            d.save_foods();
+            d.status = format!("Phone: {msg}");
+            repaint(ui);
+            Ok(json!({"ok": true, "message": msg, "id": id}))
+        }
+
+        (Method::Post, "/api/food/label/discard") => {
+            if let Some(j) = v["job"].as_str() {
+                LABEL_JOBS.lock().unwrap().get_or_insert_with(HashMap::new).remove(j);
+            }
+            Ok(json!({"ok": true}))
         }
 
         (Method::Post, "/api/calories/delete") => {
