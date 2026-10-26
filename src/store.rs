@@ -41,6 +41,11 @@ impl Paths {
             .map(PathBuf::from)
             .or_else(|| dirs::document_dir().map(|d| d.join("Morrowkeep")))
             .unwrap_or_else(|| PathBuf::from("Morrowkeep"));
+        Paths::at(root)
+    }
+
+    /// The files in a data folder.
+    pub fn at(root: PathBuf) -> Paths {
         Paths {
             items: root.join("items.json"),
             calories: root.join("calories.json"),
@@ -329,11 +334,21 @@ impl Data {
             data.save_body();
         }
         data.reload_all();
-        data.daily_backup();
+        crate::backup::daily(&data.paths);
         data
     }
 
     /// (Re)reads items.json and calories.json from disk.
+    /// Reloads a part after a backup was restored over its file.
+    pub fn reload_after_restore(&mut self, part: &str) {
+        if part == "body" {
+            if let Ok(Some(b)) = read_json(&self.paths.body) {
+                self.body = b;
+            }
+        }
+        self.reload_all();
+    }
+
     pub fn reload_all(&mut self) {
         self.items_mtime = mtime(&self.paths.items);
         self.calories_mtime = mtime(&self.paths.calories);
@@ -738,31 +753,7 @@ impl Data {
         }
     }
 
-    /// Copies items.json, calories.json and weight.json to backups/<name>-YYYY-MM-DD.json once a day,
-    /// keeping two weeks of each.
-    fn daily_backup(&self) {
-        for (prefix, file) in [("items", &self.paths.items), ("calories", &self.paths.calories), ("weight", &self.paths.weight), ("journal", &self.paths.journal), ("foods", &self.paths.foods), ("exercises", &self.paths.exercises), ("workouts", &self.paths.workouts), ("workout_log", &self.paths.workout_log)] {
-            if !file.exists() {
-                continue;
-            }
-            let target = self.paths.backups.join(format!("{prefix}-{}.json", Local::now().format("%Y-%m-%d")));
-            if !target.exists() {
-                let _ = fs::copy(file, &target);
-            }
-            if let Ok(rd) = fs::read_dir(&self.paths.backups) {
-                let mut files: Vec<PathBuf> = rd
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&format!("{prefix}-"))))
-                    .collect();
-                files.sort();
-                let excess = files.len().saturating_sub(14);
-                for f in files.into_iter().take(excess) {
-                    let _ = fs::remove_file(f);
-                }
-            }
-        }
-    }
+
 }
 
 #[derive(Default, Debug, PartialEq)]

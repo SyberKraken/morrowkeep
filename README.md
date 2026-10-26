@@ -139,7 +139,7 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
   - **History:** every session with its sets, and on each exercise page your last time, best,
     and a progress chart.
 - **Settings tab.** A full page with sections on the left (General, Appearance, Categories,
-  Input & voice, Reminders, Google Calendar). Changes are a draft until you press Save (or
+  Input & voice, Reminders, Google Calendar, Phone, Backups). Changes are a draft until you press Save (or
   Ctrl+S); Revert throws them away, and the Settings button shows a dot while something is
   unsaved.
 - **Categories.** Your task kinds, edited under Settings > Categories: name, icon, color (or the
@@ -249,7 +249,7 @@ LLVM (see the comment in `Cargo.toml`).
 | `workout_log.json` | Finished workout sessions, set by set. |
 | `body.json` | Body profile, goal weight (with earlier goals) and the fallback calorie limit. Editable on the Body tab. |
 | `inbox/` | Drop import `.json` files here. They are moved to `imported/`, or to `failed/` with an `.errors.txt`. |
-| `backups/` | Daily copies of `items.json`, `calories.json`, `weight.json`, `journal.json`, `foods.json`, `exercises.json`, `workouts.json` and `workout_log.json`, keeping 14 days of each. |
+| `backups/` | A copy of each data file once a day (tasks, calories, weight, body, foods, journal, exercises, workouts, workout history), two weeks of each; `snapshots/` holds copies made by hand or before a restore. Restore any of them under **Settings › Backups**. |
 | `models/` | Whisper voice models. |
 | `google_token.json` | Google sign-in token. Delete it to disconnect. |
 | `google_events_cache.json`, `sync_state.json` | Sync bookkeeping. |

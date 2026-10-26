@@ -33,8 +33,15 @@ pub fn spawn(shared: Arc<Mutex<Data>>, ui: UiHandle, jobs: Receiver<Job>) {
             std::fs::metadata(crate::ui::theme::theme_path(&d.paths.root, &d.settings.theme)).and_then(|m| m.modified()).ok()
         };
         let mut theme_seen = (String::new(), None);
+        // the daily backups, also when Morrowkeep runs for days without a restart
+        let mut backed_up = chrono::Local::now().date_naive();
         loop {
             let mut sync_requested = false;
+            if chrono::Local::now().date_naive() != backed_up {
+                backed_up = chrono::Local::now().date_naive();
+                let paths = shared.lock().unwrap().paths.clone();
+                crate::backup::daily(&paths);
+            }
             // phone server follows the settings (also while only in the tray)
             crate::phone::sync(&shared, &ui);
             match jobs.recv_timeout(Duration::from_secs(3)) {

@@ -37,10 +37,11 @@ pub enum Section {
     Reminders,
     Google,
     Phone,
+    Backups,
 }
 
 impl Section {
-    const ALL: [Section; 7] = [Section::General, Section::Appearance, Section::Categories, Section::Input, Section::Reminders, Section::Google, Section::Phone];
+    const ALL: [Section; 8] = [Section::General, Section::Appearance, Section::Categories, Section::Input, Section::Reminders, Section::Google, Section::Phone, Section::Backups];
 
     fn label(self) -> &'static str {
         match self {
@@ -51,6 +52,7 @@ impl Section {
             Section::Reminders => "Reminders",
             Section::Google => "Google Calendar",
             Section::Phone => "Phone",
+            Section::Backups => "Backups",
         }
     }
 
@@ -63,6 +65,7 @@ impl Section {
             Section::Reminders => "🔔",
             Section::Google => "📅",
             Section::Phone => "📱",
+            Section::Backups => "🗄",
         }
     }
 }
@@ -93,6 +96,17 @@ pub struct SettingsPage {
     download: Option<(std::sync::Arc<std::sync::Mutex<f32>>, Receiver<Result<(), String>>)>,
     #[cfg(feature = "voice")]
     mic: MicTest,
+    backups: BackupsPage,
+}
+
+/// Settings > Backups: each part's backups, which one is picked, and a restore waiting for "Yes".
+#[derive(Default)]
+struct BackupsPage {
+    /// (part, what it holds now, its backups newest first); None = not read yet.
+    list: Option<Vec<(String, String, Vec<crate::backup::Backup>)>>,
+    pick: std::collections::HashMap<String, usize>,
+    confirm: Option<String>,
+    message: Option<(String, bool)>,
 }
 
 /// Settings > Input & voice: record a few seconds, see the level, play it back, transcribe it.
@@ -134,6 +148,7 @@ impl SettingsPage {
             download: None,
             #[cfg(feature = "voice")]
             mic: MicTest::default(),
+            backups: BackupsPage::default(),
         }
     }
 
@@ -285,6 +300,7 @@ impl SettingsPage {
                 Section::Reminders => self.reminders(ui, data),
                 Section::Google => self.google(ui, data, &ctx),
                 Section::Phone => self.phone(ui, data),
+                Section::Backups => self.backups(ui, data),
             }
             ui.add_space(24.0);
         });
@@ -742,6 +758,109 @@ impl SettingsPage {
                 ui.label(RichText::new(format!("Transcribing failed: {e}")).color(err_color()));
             }
             None => {}
+        }
+    }
+
+    fn backups(&mut self, ui: &mut Ui, data: &mut Data) {
+        use crate::backup;
+        let paths = data.paths.clone();
+        let read = |paths: &crate::store::Paths| -> Vec<(String, String, Vec<backup::Backup>)> {
+            backup::PARTS
+                .iter()
+                .map(|(part, _)| {
+                    let now = std::fs::read_to_string(backup::live_path(paths, part))
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                        .and_then(|v| backup::summary(part, &v))
+                        .unwrap_or_else(|| "nothing saved yet".into());
+                    (part.to_string(), now, backup::list(paths, part))
+                })
+                .collect()
+        };
+        let bk = &mut self.backups;
+        if bk.list.is_none() {
+            bk.list = Some(read(&paths));
+        }
+        note(ui, "Morrowkeep copies each of your data files once a day and keeps two weeks of them. Restoring puts one part back the way it was in a backup; your current version is saved first, so a restore can be undone (pick the \"before a restore\" copy).");
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button("Back up everything now").on_hover_text("Saves a copy of every part right now, e.g. before a big clean-up").clicked() {
+                let made = backup::PARTS.iter().filter(|(p, _)| backup::snapshot(&paths, p, "manual").is_ok()).count();
+                bk.message = Some((format!("Backed up {made} parts"), true));
+                bk.list = None;
+            }
+            if ui.button("Open the backups folder").clicked() {
+                let _ = open::that(&paths.backups);
+            }
+            if ui.button("⟳ Refresh").clicked() {
+                bk.list = None;
+            }
+        });
+        if let Some((m, ok)) = &bk.message {
+            ui.label(RichText::new(m).color(if *ok { ok_color() } else { err_color() }));
+        }
+        let Some(list) = bk.list.clone() else { return };
+        let mut restore: Option<(String, std::path::PathBuf, String)> = None;
+        ui.add_space(6.0);
+        egui::Grid::new("backups").num_columns(4).spacing([12.0, 10.0]).show(ui, |ui| {
+            for (part, now, backups) in &list {
+                let label = backup::PARTS.iter().find(|(p, _)| p == part).map_or(part.as_str(), |(_, l)| *l);
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(label).strong());
+                    ui.label(RichText::new(format!("now: {now}")).weak().size(12.5));
+                });
+                if backups.is_empty() {
+                    ui.label(RichText::new("no backups yet").weak());
+                    ui.label("");
+                    ui.label("");
+                    ui.end_row();
+                    continue;
+                }
+                let i = bk.pick.get(part).copied().unwrap_or(0).min(backups.len() - 1);
+                let mut pick = i;
+                egui::ComboBox::from_id_salt(("backup", part.as_str())).width(330.0).selected_text(backups[i].label()).show_ui(ui, |ui| {
+                    for (k, b) in backups.iter().enumerate() {
+                        ui.selectable_value(&mut pick, k, b.label());
+                    }
+                });
+                if pick != i {
+                    bk.pick.insert(part.clone(), pick);
+                    bk.confirm = None;
+                }
+                if bk.confirm.as_deref() == Some(part.as_str()) {
+                    if ui.button(RichText::new("Yes, restore").color(super::theme::th().status.warning)).clicked() {
+                        restore = Some((part.clone(), backups[pick].path.clone(), backups[pick].label()));
+                    }
+                    if ui.button("No").clicked() {
+                        bk.confirm = None;
+                    }
+                } else {
+                    if ui.button("Restore…").clicked() {
+                        bk.confirm = Some(part.clone());
+                    }
+                    ui.label("");
+                }
+                ui.end_row();
+                if bk.confirm.as_deref() == Some(part.as_str()) {
+                    ui.label("");
+                    let extra = if part == "items" { " Tasks synced with Google Calendar are synced again afterwards." } else { "" };
+                    ui.label(RichText::new(format!("Replace your current {} ({now}) with this backup? Your current version is saved first.{extra}", label.to_lowercase())).color(super::theme::th().status.warning).size(12.5));
+                    ui.end_row();
+                }
+            }
+        });
+        if let Some((part, path, what)) = restore {
+            bk.confirm = None;
+            match backup::restore(&paths, &part, &path) {
+                Ok(()) => {
+                    data.reload_after_restore(&part);
+                    bk.message = Some((format!("Restored from {what}"), true));
+                    data.status = format!("Restored {} from a backup", part.replace('_', " "));
+                }
+                Err(e) => bk.message = Some((format!("Couldn't restore: {e}"), false)),
+            }
+            bk.list = None;
+            bk.pick.remove(&part);
         }
     }
 
