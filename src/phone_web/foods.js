@@ -125,11 +125,13 @@ function libOpen(kind, item) {
   if (kind === "meal") {
     const m = item || { name: "", servings: 1, cooked_g: null, ingredients: [], notes: "", favorite: false };
     L.edit = { kind, id: m.id || null, name: m.name, servings: m.servings, cooked_g: m.cooked_g, notes: m.notes || "", favorite: !!m.favorite,
-      aliases: (m.aliases || []).join(", "), ingredients: m.ingredients.map((x) => ({ food: x.food, grams: x.grams })) };
+      aliases: (m.aliases || []).join(", "), ingredients: m.ingredients.map((x) => ({ food: x.food, grams: Math.round(x.grams * 10) / 10 })) };
   } else {
     const f = item || { name: "", kcal_per_100g: "", serving_g: 100, serving_name: "serving", notes: "", favorite: false };
-    L.edit = { kind, id: f.id || null, name: f.name, aliases: (f.aliases || []).join(", "), kcal_per_100g: f.kcal_per_100g, serving_g: f.serving_g,
-      serving_name: f.serving_name, protein_per_100g: f.protein_per_100g, carbs_per_100g: f.carbs_per_100g, fat_per_100g: f.fat_per_100g,
+    // stored as 32-bit floats: 3.9 arrives as 3.9000000953674316
+    const n2 = (x) => x == null || x === "" ? x : Math.round(x * 100) / 100;
+    L.edit = { kind, id: f.id || null, name: f.name, aliases: (f.aliases || []).join(", "), kcal_per_100g: n2(f.kcal_per_100g), serving_g: n2(f.serving_g),
+      serving_name: f.serving_name, protein_per_100g: n2(f.protein_per_100g), carbs_per_100g: n2(f.carbs_per_100g), fat_per_100g: n2(f.fat_per_100g),
       notes: f.notes || "", favorite: !!f.favorite };
   }
   window.scrollTo(0, 0);

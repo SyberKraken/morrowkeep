@@ -367,6 +367,7 @@ function renderMore(st) {
   const row = (tab, ic, title, sub) => `<div class="item" data-act="tab" data-tab="${tab}"><span style="font-size:20px;width:28px">${ic}</span>
     <div class="grow"><b>${title}</b><div class="muted">${sub}</div></div><span class="muted">›</span></div>`;
   return headerHtml() + `<div class="card list menu">
+    ${row("progress", "📈", "Progress", "Calories and weight charts, body numbers, habit streaks")}
     ${row("ask", "✦", "Ask Claude", "Plan, log or change anything in words")}
     </div>
     ${notifPanel()}`;

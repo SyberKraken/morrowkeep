@@ -27,7 +27,7 @@ const SW_JS: &str = include_str!("phone_web/sw.js");
 const MANIFEST: &str = include_str!("phone_web/manifest.webmanifest");
 const ICON: &[u8] = include_bytes!("../assets/morrowkeep.png");
 /// The phone app's screens, one file each (they share app.js's helpers).
-const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js"))];
+const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js"))];
 
 /// How long a pairing code works.
 const PAIR_SECS: u64 = 600;
@@ -776,6 +776,60 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             done(&mut d, msg)
         }
 
+        // Progress: calories and weight over time, the Body numbers and habit streaks
+        (Method::Get, "/api/progress") => {
+            let days = q.get("days").and_then(|n| n.parse::<i64>().ok()).unwrap_or(30).clamp(7, 365);
+            let d = shared.lock().unwrap();
+            let from = today - Duration::days(days - 1);
+            let mut calories = Vec::new();
+            let mut day = from;
+            while day <= today {
+                calories.push(json!({"date": day.to_string(), "kcal": d.calories_on(day)}));
+                day += Duration::days(1);
+            }
+            let weights: Vec<Value> = d.weights.iter().filter(|w| w.date >= from).map(|w| json!({"date": w.date.to_string(), "kg": dec(w.kg, 1)})).collect();
+            let trend: Vec<Value> = crate::body::trend_series(&d.weights).into_iter().filter(|(x, _)| *x >= from).map(|(x, kg)| json!({"date": x.to_string(), "kg": dec(kg, 2)})).collect();
+            let goal = d.body.goal.as_ref().map(|g| {
+                json!({"target_kg": dec(g.target_kg, 1), "target_date": g.target_date.to_string(), "set_on": g.set_on.to_string(), "start_kg": dec(g.start_kg, 2),
+                       "reached_on": g.reached_on.map(|x| x.to_string()),
+                       "status": crate::body::progress(g, &d.weights, today).map(|p| if p.to_go <= 0.0 { format!("Goal {:.1} kg reached", g.target_kg) } else { format!("{:.1} kg to go · {}", p.to_go, p.status()) })})
+            });
+            let body = match d.body_plan(today) {
+                Some((n, p)) => json!({"complete": true, "weight_kg": dec(n.weight_kg, 1), "age": n.age, "bmr": n.bmr.round(), "formula": n.formula,
+                    "tdee": n.tdee.round(), "bmi": dec(n.bmi, 1), "healthy": [n.healthy_kg.0.round(), n.healthy_kg.1.round()],
+                    "daily": p.daily, "losing": p.mode == crate::body::Mode::Lose, "deficit": p.deficit.round(), "kg_per_week": dec(p.kg_per_week, 2),
+                    "days_left": p.days_left, "safe_date": p.safe_date.map(|x| x.to_string()), "too_fast": p.too_fast, "floored": p.floored}),
+                None => json!({"complete": false, "missing": d.body.missing(d.current_weight()), "daily": d.daily_limit()}),
+            };
+            let pace = crate::body::recent_pace(&d.weights).map(|k| dec(k * 7.0, 2));
+            // habit streaks: each repeating task's last 21 days (due / done)
+            let start = today - Duration::days(20);
+            let occ = crate::model::occurrences(&d.items, start, today);
+            let mut habits: Vec<Value> = Vec::new();
+            for (i, it) in d.items.iter().enumerate().filter(|(_, it)| it.repeat.is_some() && it.date.is_some_and(|x| x <= today)) {
+                let due: Vec<NaiveDate> = occ.iter().filter(|(_, k)| *k == i).map(|(x, _)| *x).collect();
+                if due.is_empty() {
+                    continue;
+                }
+                // current streak: done occurrences in a row, not broken by today if it's still open
+                let mut streak = 0;
+                for x in due.iter().rev() {
+                    if it.is_done_on(*x) {
+                        streak += 1;
+                    } else if *x == today {
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
+                let cells: Vec<Value> = (0..21).map(|k| start + Duration::days(k)).map(|x| json!(if !due.contains(&x) { 0 } else if it.is_done_on(x) { 2 } else { 1 })).collect();
+                habits.push(json!({"title": it.title, "icon": crate::categories::icon(&it.kind), "color": hex(crate::ui::kind_color(&it.kind)),
+                                   "streak": streak, "done": due.iter().filter(|x| it.is_done_on(**x)).count(), "due": due.len(), "cells": cells}));
+            }
+            Ok(json!({"from": from.to_string(), "today": today.to_string(), "calories": calories, "limit": d.daily_limit(), "limit_from_plan": d.limit_from_plan(), "weights": weights, "trend": trend, "goal": goal,
+                      "body": body, "pace_kg_week": pace, "habits": habits, "journal_streak": crate::journal::streak(&d.journal, today)}))
+        }
+
         (Method::Post, "/api/calories/delete") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
             let mut d = shared.lock().unwrap();
@@ -1039,6 +1093,12 @@ fn item_json(it: &crate::model::Item, day: NaiveDate) -> Value {
     json!({"id": it.id, "title": it.title, "date": it.date.map(|x| x.to_string()), "day": day.to_string(), "time": it.time.map(|t| t.format("%H:%M").to_string()),
            "duration": it.duration_min, "done": it.is_done_on(day), "kind": it.kind, "color": hex(crate::ui::kind_color(&it.kind)),
            "icon": crate::categories::icon(&it.kind), "repeat": it.repeat, "notes": it.notes})
+}
+
+/// An f32 rounded to `places` decimals as f64, so JSON shows 81.8 and not 81.80000305175781.
+fn dec(x: f32, places: i32) -> f64 {
+    let k = 10f64.powi(places);
+    (x as f64 * k).round() / k
 }
 
 fn state(d: &Data, device: &str) -> Value {
