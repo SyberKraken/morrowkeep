@@ -286,29 +286,14 @@ impl JournalUi {
 
     fn start_reflection(&mut self, data: &mut Data) {
         let today = Local::now().date_naive();
-        let week: Vec<&JournalEntry> = data.journal.iter().filter(|e| e.kind == "note" && e.date > today - Duration::days(7)).collect();
-        if week.is_empty() {
+        let Some(prompt) = journal::reflection_prompt(&data.journal, today) else {
             data.status = "Nothing written in the last 7 days to reflect on".into();
             return;
-        }
+        };
         let Some(cli) = crate::claude::find_cli(&data.settings) else {
             data.status = "Claude Code not found. Set its path in Settings > Input & voice.".into();
             return;
         };
-        let mut notes = String::new();
-        for e in week {
-            notes += &format!("\n[{} {}]", e.date.format("%a %b %-d"), journal::time_label(e));
-            if let Some(m) = e.mood {
-                notes += &format!(" mood: {}", journal::mood_label(m));
-            }
-            notes += &format!("\n{}\n", e.full_text().trim());
-        }
-        let prompt = format!(
-            "You are a warm, honest journaling companion. These are my journal entries from the last 7 days:\n{notes}\n\
-             Write a short reflection for me (at most 150 words, plain text, no headings, no markdown, no JSON): \
-             the main themes and how my mood moved, one or two things that went well, and one gentle, concrete \
-             suggestion for the coming week. Write to me as \"you\"."
-        );
         let (tx, rx) = mpsc::channel();
         let (model, dir, ctx) = (data.settings.claude_model.clone(), data.paths.root.clone(), self.ctx.clone());
         std::thread::spawn(move || {
@@ -801,15 +786,7 @@ impl JournalUi {
     fn run(&mut self, a: EntryAction, data: &mut Data) {
         match a {
             EntryAction::Delete(id) => {
-                if let Some(pos) = data.journal.iter().position(|e| e.id == id) {
-                    let e = data.journal.remove(pos);
-                    // recordings are moved aside, not destroyed
-                    if let Some(file) = e.audio {
-                        let deleted = data.paths.journal_audio.join("deleted");
-                        let _ = std::fs::create_dir_all(&deleted);
-                        let _ = std::fs::rename(data.paths.journal_audio.join(&file), deleted.join(&file));
-                    }
-                    data.save_journal();
+                if data.delete_journal_entry(&id) {
                     data.status = "Journal entry deleted".into();
                 }
                 self.confirm_delete = None;

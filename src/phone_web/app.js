@@ -544,7 +544,7 @@ function renderJournal(st) {
         <option value="pick" ${J.day === "pick" ? "selected" : ""}>Pick a date…</option></select>
         ${J.day === "pick" ? `<input id="jdate" type="date" max="${localDate()}" value="${esc(J.date || localDate())}" style="width:auto">` : ""}</div>
       <div class="row" style="margin-top:10px">${recButton("journal")}<button class="primary grow" data-act="savejournal">Save</button></div>
-      ${pendingAudioHtml()}</div>${entries || `<p class="muted center">No entries in the last few days.</p>`}`;
+      ${pendingAudioHtml()}</div>${journalBrowseHtml(st, entries || `<p class="muted center">No entries in the last few days.</p>`)}`;
 }
 
 function askPreviewHtml() {

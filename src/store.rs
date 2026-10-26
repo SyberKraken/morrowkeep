@@ -458,6 +458,19 @@ impl Data {
         }
     }
 
+    /// Deletes a journal entry; its recording is moved to journal-audio/deleted, not destroyed.
+    pub fn delete_journal_entry(&mut self, id: &str) -> bool {
+        let Some(pos) = self.journal.iter().position(|e| e.id == id) else { return false };
+        let e = self.journal.remove(pos);
+        if let Some(file) = e.audio {
+            let deleted = self.paths.journal_audio.join("deleted");
+            let _ = std::fs::create_dir_all(&deleted);
+            let _ = std::fs::rename(self.paths.journal_audio.join(&file), deleted.join(&file));
+        }
+        self.save_journal();
+        true
+    }
+
     /// Saves a finished (or ended early) workout; a completed one ticks off its linked task
     /// for the day. Returns a status message.
     pub fn record_workout(&mut self, session: crate::workouts::Session, task: Option<&str>) -> String {

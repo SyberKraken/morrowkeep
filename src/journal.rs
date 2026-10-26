@@ -164,6 +164,28 @@ pub const PROMPTS: &[&str] = &[
 ];
 
 /// Days in a row with at least one entry, ending today (or yesterday, if today has none yet).
+/// The "Reflect on my week" request: the last 7 days of notes, or None if there are none.
+pub fn reflection_prompt(entries: &[JournalEntry], today: NaiveDate) -> Option<String> {
+    let week: Vec<&JournalEntry> = entries.iter().filter(|e| e.kind == "note" && e.date > today - chrono::Duration::days(7)).collect();
+    if week.is_empty() {
+        return None;
+    }
+    let mut notes = String::new();
+    for e in week {
+        notes += &format!("\n[{} {}]", e.date.format("%a %b %-d"), time_label(e));
+        if let Some(m) = e.mood {
+            notes += &format!(" mood: {}", mood_label(m));
+        }
+        notes += &format!("\n{}\n", e.full_text().trim());
+    }
+    Some(format!(
+        "You are a warm, honest journaling companion. These are my journal entries from the last 7 days:\n{notes}\n\
+         Write a short reflection for me (at most 150 words, plain text, no headings, no markdown, no JSON): \
+         the main themes and how my mood moved, one or two things that went well, and one gentle, concrete \
+         suggestion for the coming week. Write to me as \"you\"."
+    ))
+}
+
 pub fn streak(entries: &[JournalEntry], today: NaiveDate) -> u32 {
     let days: BTreeSet<NaiveDate> = entries.iter().filter(|e| e.kind == "note").map(|e| e.date).collect();
     let mut d = if days.contains(&today) { today } else { today - Duration::days(1) };

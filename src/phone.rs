@@ -27,7 +27,7 @@ const SW_JS: &str = include_str!("phone_web/sw.js");
 const MANIFEST: &str = include_str!("phone_web/manifest.webmanifest");
 const ICON: &[u8] = include_bytes!("../assets/morrowkeep.png");
 /// The phone app's screens, one file each (they share app.js's helpers).
-const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js"))];
+const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js")), ("/journal.js", include_str!("phone_web/journal.js"))];
 
 /// How long a pairing code works.
 const PAIR_SECS: u64 = 600;
@@ -70,6 +70,9 @@ struct LabelJob {
 }
 
 static LABEL_JOBS: Mutex<Option<HashMap<String, LabelJob>>> = Mutex::new(None);
+
+/// "Reflect on my week" from the phone: None while Claude works, then the outcome.
+static REFLECT_JOBS: Mutex<Option<HashMap<String, Option<Result<(), String>>>>> = Mutex::new(None);
 static TRANSCRIBING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 fn sha(s: &str) -> String {
@@ -830,6 +833,116 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
                       "body": body, "pace_kg_week": pace, "habits": habits, "journal_streak": crate::journal::streak(&d.journal, today)}))
         }
 
+        // the journal, a page of days at a time (newest first), or search results
+        (Method::Get, "/api/journal") => {
+            let d = shared.lock().unwrap();
+            let transcribing = TRANSCRIBING.lock().unwrap().clone().unwrap_or_default();
+            let ej = |e: &crate::journal::JournalEntry| entry_json(e, &transcribing);
+            let query = q.get("q").map(|s| s.trim().to_string()).unwrap_or_default();
+            let (pinned, voice) = (q.get("pinned").is_some_and(|v| v == "1"), q.get("voice").is_some_and(|v| v == "1"));
+            let keep = |e: &&crate::journal::JournalEntry| (!pinned || e.pinned) && (!voice || e.audio.is_some()) && (query.is_empty() || e.matches(&query));
+            let mut list: Vec<&crate::journal::JournalEntry> = d.journal.iter().filter(keep).collect();
+            list.sort_by_key(|e| std::cmp::Reverse(crate::journal::sort_key(e)));
+            // browsing: 10 days with entries per page, before `before`
+            let filtered = pinned || voice || !query.is_empty();
+            let before = q.get("before").and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).unwrap_or(today + Duration::days(1));
+            let mut days: Vec<NaiveDate> = list.iter().map(|e| e.date).filter(|x| *x < before).collect();
+            days.dedup();
+            let page = if filtered { 60 } else { 10 };
+            let more = days.len() > page;
+            days.truncate(page);
+            let out: Vec<Value> = days
+                .iter()
+                .map(|day| json!({"date": day.to_string(), "entries": list.iter().filter(|e| e.date == *day).map(|e| ej(e)).collect::<Vec<_>>()}))
+                .collect();
+            // most used tags, and what you wrote a month, 3 months and a year ago
+            let mut tags: HashMap<String, usize> = HashMap::new();
+            for e in &d.journal {
+                for t in e.tags() {
+                    *tags.entry(t).or_default() += 1;
+                }
+            }
+            let mut tags: Vec<(String, usize)> = tags.into_iter().collect();
+            tags.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            let earlier: Vec<Value> = [(30, "A month ago"), (91, "3 months ago"), (365, "A year ago")]
+                .iter()
+                .filter_map(|(n, label)| {
+                    let day = today - Duration::days(*n);
+                    let es: Vec<Value> = d.journal.iter().filter(|e| e.date == day).map(|e| ej(e)).collect();
+                    (!es.is_empty()).then(|| json!({"label": label, "date": day.to_string(), "entries": es}))
+                })
+                .collect();
+            Ok(json!({"days": out, "more": more, "tags": tags.iter().take(8).map(|(t, _)| t).collect::<Vec<_>>(), "on_this_day": earlier,
+                      "total": d.journal.len(), "streak": crate::journal::streak(&d.journal, today)}))
+        }
+
+        (Method::Post, "/api/journal/update") => {
+            let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
+            let mut d = shared.lock().unwrap();
+            let e = d.journal.iter_mut().find(|e| e.id == id).ok_or_else(|| bad("That entry isn't there any more"))?;
+            if let Some(t) = v["text"].as_str() {
+                e.text = t.trim().to_string();
+                e.edited = Some(Local::now());
+            }
+            if let (Some(t), true) = (v["transcript"].as_str(), e.audio.is_some()) {
+                e.transcript = Some(t.trim().to_string());
+                e.edited = Some(Local::now());
+            }
+            if let Some(m) = v["mood"].as_u64() {
+                e.mood = (1..=5).contains(&m).then_some(m as u8);
+            }
+            if let Some(p) = v["pinned"].as_bool() {
+                e.pinned = p;
+            }
+            d.save_journal();
+            done(&mut d, "journal entry saved".into())
+        }
+
+        (Method::Post, "/api/journal/delete") => {
+            let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
+            let mut d = shared.lock().unwrap();
+            if !d.delete_journal_entry(id) {
+                return Err(bad("That entry isn't there any more"));
+            }
+            done(&mut d, "journal entry deleted".into())
+        }
+
+        // "Reflect on my week": Claude writes a short reflection, added to today's journal
+        (Method::Post, "/api/journal/reflect") => {
+            let (cli, prompt, model, dir) = {
+                let d = shared.lock().unwrap();
+                let prompt = crate::journal::reflection_prompt(&d.journal, today).ok_or_else(|| bad("Nothing written in the last 7 days to reflect on"))?;
+                (crate::claude::find_cli(&d.settings).ok_or_else(|| bad("Claude Code wasn't found on your PC"))?, prompt, d.settings.claude_model.clone(), d.paths.root.clone())
+            };
+            let id = uuid::Uuid::new_v4().simple().to_string();
+            REFLECT_JOBS.lock().unwrap().get_or_insert_with(HashMap::new).insert(id.clone(), None);
+            let (job, shared, ui) = (id.clone(), shared.clone(), ui.clone());
+            std::thread::spawn(move || {
+                let outcome = crate::claude::ask(&cli, &model, &prompt, &dir).map(|text| {
+                    let mut d = shared.lock().unwrap();
+                    let mut e = crate::journal::JournalEntry::new(text.trim());
+                    e.kind = "reflection".into();
+                    d.journal.push(e);
+                    d.save_journal();
+                    d.status = "Phone: Claude's reflection added to today's journal".into();
+                    repaint(&ui);
+                });
+                REFLECT_JOBS.lock().unwrap().get_or_insert_with(HashMap::new).insert(job, Some(outcome));
+            });
+            Ok(json!({"job": id}))
+        }
+
+        (Method::Get, "/api/journal/reflect") => {
+            let id = q.get("job").ok_or_else(|| bad("Missing job"))?;
+            let jobs = REFLECT_JOBS.lock().unwrap();
+            match jobs.as_ref().and_then(|j| j.get(id)) {
+                None => Err(bad("That request is gone")),
+                Some(None) => Ok(json!({"done": false})),
+                Some(Some(Ok(()))) => Ok(json!({"done": true})),
+                Some(Some(Err(e))) => Ok(json!({"done": true, "error": e})),
+            }
+        }
+
         (Method::Post, "/api/calories/delete") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
             let mut d = shared.lock().unwrap();
@@ -1086,6 +1199,13 @@ pub fn push_all(shared: &Arc<Mutex<Data>>, payload: &Value) -> usize {
         }
     }
     sent
+}
+
+/// A journal entry for the phone.
+fn entry_json(e: &crate::journal::JournalEntry, transcribing: &HashSet<String>) -> Value {
+    json!({"id": e.id, "date": e.date.to_string(), "time": e.time.map(|t| t.format("%H:%M").to_string()), "text": e.text,
+           "transcript": e.transcript, "mood": e.mood, "mood_label": e.mood.map(crate::journal::mood_label), "pinned": e.pinned,
+           "audio_secs": e.audio_secs, "transcribing": transcribing.contains(&e.id), "kind": e.kind, "words": e.words()})
 }
 
 /// A task for the phone, as it is on `day`.
