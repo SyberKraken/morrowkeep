@@ -158,10 +158,28 @@ A small, always-on Windows planner for tasks, chores, meals and workouts.
 
 ## Phone app (through Tailscale)
 
-Morrowkeep can serve a small app for your phone: log weight, calories (your food library,
-Claude estimates, a number, or a photo of a nutrition label), journal entries (typed or recorded; the recording is
-transcribed by Whisper on your PC), tick off today's tasks and ask Claude, all from the phone.
-It's the same data as the desktop app, and it uses your desktop theme.
+Morrowkeep can serve an app for your phone with the same data as the desktop app, in your
+desktop theme. Its tabs:
+
+- **Today**: the entry bar (Local or Claude mode, the same commands as on the PC: tasks,
+  `450 kcal pasta`, `82.4 kg`, `done vacuum`, `1 serving kvarg`, `journal: …`), the stars,
+  calories, weight, a quick journal and today's tasks. **‹ ›** picks an earlier day, and
+  everything you log then goes to that day.
+- **Plan**: overdue tasks, the next two weeks and the backlog. Tick tasks off, edit them
+  (title, date, time, category, notes) or delete them.
+- **Food**: *Log* from your library, estimate with Claude, or type a number; *Library* to add
+  and edit ingredients and meals (meal totals update as you type). **Scan** reads a nutrition
+  label photo into a new ingredient.
+- **Train**: your workouts with how to do each exercise, and the same player as the PC (countdown
+  ring, beeps and vibration, timed steps moving on by themselves, Done set for reps). The screen
+  stays on while training. Sessions show up in the history on both.
+- **Journal**: write or record (Whisper transcribes on your PC), browse every day, search,
+  filter by pinned, voice or #tag, On this day, edit, pin or delete entries, and **Reflect on
+  my week** with Claude.
+- **More**: **Progress** (calories against your limit, weight with its 7-day average and goal
+  path, the Body numbers and habit streaks), **Ask Claude** and notifications.
+
+Building workouts, settings, themes and categories stay on the PC.
 
 It runs on your PC (a small web server inside Morrowkeep that only listens on `127.0.0.1`), and
 your phone reaches it privately through **Tailscale** (free for personal use). Nothing is put on

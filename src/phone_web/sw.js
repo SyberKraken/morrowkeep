@@ -1,6 +1,6 @@
 // Keeps the app shell available when the PC can't be reached, so the phone app still opens
 // (and can queue entries). API requests always go to the network.
-const CACHE = "morrowkeep-shell-v9";
+const CACHE = "morrowkeep-shell-v10";
 const SHELL = ["/", "/app.js", "/plan.js", "/foods.js", "/train.js", "/progress.js", "/journal.js", "/manifest.webmanifest", "/icon.png"];
 
 self.addEventListener("install", (e) => {

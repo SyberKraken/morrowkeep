@@ -583,7 +583,8 @@ function askPreviewHtml() {
 
 function renderAsk(st) {
   const A = S.ask;
-  return headerHtml() + `<div class="card"><h3>Ask Claude</h3>
+  return headerHtml() + `<div class="row" style="margin-bottom:10px"><button class="small" data-act="tab" data-tab="more">‹ More</button></div>
+    <div class="card"><h3>Ask Claude</h3>
     <p class="muted" style="margin:0 0 8px">Anything you'd type in Morrowkeep's entry bar: "I ran Monday and Tuesday", "plan 3 gym sessions this week", "I had a burrito for lunch".</p>
     <textarea id="askText" placeholder="What should Claude do?">${esc(A.text)}</textarea>
     <button class="primary block" data-act="ask" style="margin-top:8px" ${A.job || !st.claude ? "disabled" : ""}>Ask</button>
