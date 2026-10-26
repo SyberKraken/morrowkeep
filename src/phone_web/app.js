@@ -7,6 +7,8 @@ const S = {
   token: localStorage.getItem("mk_token") || "",
   state: null,
   tab: localStorage.getItem("mk_tab") || "today",
+  // an earlier day picked on Today: what you log goes to that day (null = today)
+  day: null,
   quickJournal: "",
   entry: { text: "", mode: localStorage.getItem("mk_mode") || "local" },
   journal: { text: "", mood: null, day: "today", date: "" },
@@ -36,6 +38,10 @@ const localTime = (d = new Date()) => `${pad(d.getHours())}:${pad(d.getMinutes()
 const yesterday = () => { const d = new Date(); d.setDate(d.getDate() - 1); return localDate(d); };
 const mmss = (s) => `${Math.floor(s / 60)}:${pad(Math.round(s % 60))}`;
 const MOODS = ["rough", "meh", "okay", "good", "great"];
+// the day entries go to, and their time (none for an earlier day)
+const logDate = () => S.day || localDate();
+const logTime = () => (S.day ? null : localTime());
+const dayWord = () => (S.day ? "" : " today");
 
 function toast(msg, ms = 2600) {
   const t = $("#toast");
@@ -85,7 +91,7 @@ const saveQueue = (q) => localStorage.setItem("mk_queue", JSON.stringify(q));
 
 /// Sends a change; if the PC can't be reached it's kept and sent later.
 async function send(path, body, okMsg) {
-  body = Object.assign({ date: localDate(), time: localTime() }, body);
+  body = Object.assign({ date: logDate(), time: logTime() }, body);
   try {
     const r = await post(path, body);
     toast(okMsg || r.message || "Saved");
@@ -116,7 +122,7 @@ async function flushQueue() {
 
 async function refresh() {
   try {
-    S.state = await api("/api/state");
+    S.state = await api("/api/state" + (S.day ? "?date=" + S.day : ""));
     applyTheme(S.state.theme);
     S.offline = false;
   } catch (e) {
@@ -182,7 +188,16 @@ function headerHtml() {
   return `<header><span class="brand">Morrowkeep</span><span class="muted">${esc(S.state?.date_label || "")}
     ${q ? `<span id="queue"> · ${q} waiting</span>` : ""}${S.offline ? ` · <span style="color:var(--warning)">PC offline</span>` : ""}
     <button class="small" data-act="bell" aria-label="Notifications" style="margin-left:6px;${on ? "" : "opacity:.7"}">${on ? "🔔" : "🔕"}</button></span></header>
-    ${S.bellOpen ? notifPanel() : ""}`;
+    ${S.bellOpen ? notifPanel() : ""}
+    ${S.day ? `<div class="card row" style="border-color:var(--warning);padding:8px 12px"><span class="grow">📅 Logging for <b>${esc(S.state?.day_label || S.day)}</b></span>
+      <button class="small" data-act="dayreset">Back to today</button></div>` : ""}`;
+}
+
+/// ‹ day › on the Today screen, to log or tick off things for an earlier day.
+function daySwitchHtml() {
+  const label = !S.day ? "Today" : S.day === yesterday() ? "Yesterday" : (S.state?.day_label || S.day);
+  return `<div class="row" style="margin-bottom:12px"><button class="small" data-act="dayshift" data-d="-1" aria-label="Earlier day">‹</button>
+    <b class="grow center">${esc(label)}</b><button class="small" data-act="dayshift" data-d="1" ${S.day ? "" : "disabled"} aria-label="Later day">›</button></div>`;
 }
 
 // ---------------------------------------------------------------- notifications
@@ -269,7 +284,7 @@ function caloriesCard(st, withEntries) {
   let frac = 0;
   if (target) {
     const left = target - c.total;
-    line = left >= 0 ? `${left} left today` : `${-left} over today`;
+    line = left >= 0 ? `${left} left${dayWord()}` : `${-left} over${dayWord()}`;
     frac = Math.min(1, c.total / Math.max(1, target));
   }
   const over = target && c.total > target;
@@ -282,7 +297,7 @@ function caloriesCard(st, withEntries) {
 }
 
 function entriesList(entries) {
-  if (!entries.length) return `<p class="muted">Nothing logged today yet.</p>`;
+  if (!entries.length) return `<p class="muted">Nothing logged${dayWord()} yet.</p>`;
   return `<div class="list">${entries.map((e) => `<div class="item"><span class="muted" style="width:44px">${esc(e.time || "")}</span>
     <b style="color:var(--calories);width:70px">${e.kcal} kcal</b><span class="grow" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.description || "")}</span>
     <button class="small" data-act="delcal" data-id="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join("")}</div>`;
@@ -292,7 +307,7 @@ function weightCard(st) {
   const w = st.weight;
   const value = S.weight || (w.today != null ? w.today.toFixed(1) : "");
   const hint = w.last ? `last ${w.last.kg.toFixed(1)} kg on ${esc(w.last.date)}` : "kg";
-  return `<div class="card"><h3>Weight${w.today != null ? ` · <span style="color:var(--weight)">${w.today.toFixed(1)} kg today</span>` : ""}</h3>
+  return `<div class="card"><h3>Weight${w.today != null ? ` · <span style="color:var(--weight)">${w.today.toFixed(1)} kg${dayWord()}</span>` : ""}</h3>
     <div class="row"><input class="grow" id="weightIn" inputmode="decimal" placeholder="${esc(hint)}" value="${esc(value)}"><span class="muted">kg</span>
     <button class="primary" data-act="weight">Save</button></div>
     ${w.goal ? `<div class="muted" style="color:var(--goal);margin-top:6px">${esc(w.goal)}</div>` : ""}</div>`;
@@ -308,15 +323,16 @@ function recButton(target) {
 
 function quickJournalCard(st) {
   const n = st.journal.today;
-  return `<div class="card"><h3>Journal · ${n ? `${n} entr${n === 1 ? "y" : "ies"} today` : "nothing yet today"}</h3>
+  return `<div class="card"><h3>Journal · ${n ? `${n} entr${n === 1 ? "y" : "ies"}${dayWord()}` : `nothing yet${dayWord()}`}</h3>
     <textarea id="quickJournal" style="min-height:60px" placeholder="A line about today… (#tags work)">${esc(S.quickJournal)}</textarea>
     <div class="row" style="margin-top:8px">${recButton("quick")}<button class="primary grow" data-act="quickjournal">Save</button></div>
     ${pendingAudioHtml()}</div>`;
 }
 
 function tasksCard(st) {
-  if (!st.tasks.length) return `<div class="card"><h3>Today's tasks</h3><p class="muted">Nothing planned today.</p></div>`;
-  return `<div class="card"><h3>Today's tasks</h3>${st.tasks.map((x) => `<div class="task" data-act="toggle" data-id="${esc(x.id)}">
+  const title = S.day ? "Tasks" : "Today's tasks";
+  if (!st.tasks.length) return `<div class="card"><h3>${title}</h3><p class="muted">Nothing planned${dayWord() || " that day"}.</p></div>`;
+  return `<div class="card"><h3>${title}</h3>${st.tasks.map((x) => `<div class="task" data-act="toggle" data-id="${esc(x.id)}">
     <span class="dot" style="border-color:${x.color};background:${x.done ? x.color : "transparent"}">${x.done ? "✓" : ""}</span>
     <span style="flex:1;${x.done ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(x.title)}</span>
     <span class="muted">${x.repeat ? "↻ " : ""}${esc(x.time || "")}</span></div>`).join("")}</div>`;
@@ -340,7 +356,7 @@ async function entrySubmit() {
   if (!text) return toast("Type something first");
   if (E.mode === "claude") return startAsk(text, false).then(() => { E.text = ""; rerender(); });
   try {
-    const r = await post("/api/entry", { text, date: localDate() });
+    const r = await post("/api/entry", { text, date: logDate() });
     E.text = "";
     if (r.claude) return startAsk(r.claude, true);
     toast(r.message || "Saved");
@@ -350,7 +366,7 @@ async function entrySubmit() {
     if (e.server) return toast(e.message, 4000);
     // the PC can't be reached: keep it and send it later
     const q = queue();
-    q.push({ path: "/api/entry", body: { text, date: localDate(), time: localTime() } });
+    q.push({ path: "/api/entry", body: { text, date: logDate(), time: logTime() } });
     saveQueue(q);
     E.text = "";
     toast("Your PC isn't reachable. Saved on the phone, it'll be sent later.", 4000);
@@ -359,7 +375,7 @@ async function entrySubmit() {
 }
 
 function renderToday(st) {
-  return headerHtml() + entryCardHtml(st) + starsHtml(st) + caloriesCard(st, false) + weightCard(st) + quickJournalCard(st) + tasksCard(st);
+  return headerHtml() + daySwitchHtml() + entryCardHtml(st) + starsHtml(st) + caloriesCard(st, !!S.day) + weightCard(st) + quickJournalCard(st) + tasksCard(st);
 }
 
 // More: everything that doesn't need a tab of its own
@@ -709,7 +725,7 @@ async function stopRec() {
   const wav = toWav(R.chunks, R.rate);
   // text and mood typed alongside go with the recording
   const meta = R.target === "quick"
-    ? { text: S.quickJournal, mood: "", date: localDate(), time: localTime() }
+    ? { text: S.quickJournal, mood: "", date: logDate(), time: logTime() || "" }
     : { text: S.journal.text, mood: S.journal.mood || "", date: journalDay(), time: S.journal.day === "today" ? localTime() : "" };
   S.pendingAudio = { wav, meta, target: R.target };
   await uploadAudio();
@@ -781,6 +797,16 @@ document.addEventListener("click", async (e) => {
     case "tab": return goTab(el.dataset.tab);
     case "entrymode": S.entry.mode = S.entry.mode === "claude" ? "local" : "claude"; localStorage.setItem("mk_mode", S.entry.mode); return rerender();
     case "entryadd": return entrySubmit();
+    case "dayshift": {
+      const d = new Date((S.day || localDate()) + "T12:00");
+      d.setDate(d.getDate() + +el.dataset.d);
+      const iso = localDate(d);
+      S.day = iso >= localDate() ? null : iso;
+      S.weight = "";
+      await refresh();
+      return rerender();
+    }
+    case "dayreset": S.day = null; S.weight = ""; await refresh(); return rerender();
     case "weight": {
       const kg = parseFloat((S.weight || "").replace(",", "."));
       if (!(kg >= 20 && kg <= 400)) return toast("Enter your weight in kg, like 82.4");

@@ -333,7 +333,11 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
         Ok(json!({"ok": true, "message": msg}))
     };
     match (method, path) {
-        (Method::Get, "/api/state") => Ok(state(&shared.lock().unwrap(), device)),
+        (Method::Get, "/api/state") => {
+            // an earlier day picked on the phone's Today screen
+            let day = day_of(v, q)?;
+            Ok(state(&shared.lock().unwrap(), device, day))
+        }
 
         // ---- notifications
         (Method::Get, "/api/push/key") => {
@@ -1221,7 +1225,9 @@ fn dec(x: f32, places: i32) -> f64 {
     (x as f64 * k).round() / k
 }
 
-fn state(d: &Data, device: &str) -> Value {
+/// Everything the phone shows; calories, weight, tasks and the journal count are for `day`
+/// (today unless an earlier day was picked).
+fn state(d: &Data, device: &str, day: NaiveDate) -> Value {
     let now = Local::now();
     let today = now.date_naive();
     let th = crate::ui::theme::th();
@@ -1237,13 +1243,13 @@ fn state(d: &Data, device: &str) -> Value {
     });
 
     // tasks: scheduled first, then anytime (same order as the Habits board)
-    let mut occ: Vec<usize> = crate::model::occurrences(&d.items, today, today).into_iter().map(|(_, i)| i).collect();
+    let mut occ: Vec<usize> = crate::model::occurrences(&d.items, day, day).into_iter().map(|(_, i)| i).collect();
     occ.sort_by_key(|i| (d.items[*i].time.is_none(), d.items[*i].time));
     let tasks: Vec<Value> = occ
         .iter()
         .map(|i| {
             let it = &d.items[*i];
-            json!({"id": it.id, "title": it.title, "time": it.time.map(|t| t.format("%H:%M").to_string()), "done": it.is_done_on(today),
+            json!({"id": it.id, "title": it.title, "time": it.time.map(|t| t.format("%H:%M").to_string()), "done": it.is_done_on(day),
                    "color": hex(crate::ui::kind_color(&it.kind)), "icon": crate::categories::icon(&it.kind), "repeat": it.repeat.is_some()})
         })
         .collect();
@@ -1251,11 +1257,11 @@ fn state(d: &Data, device: &str) -> Value {
     let entries: Vec<Value> = d
         .calories
         .iter()
-        .filter(|c| c.date == today)
+        .filter(|c| c.date == day)
         .map(|c| json!({"id": c.id, "time": c.time.map(|t| t.format("%H:%M").to_string()), "kcal": c.kcal, "description": c.description}))
         .collect();
 
-    let last = d.weight_before(today).map(|w| json!({"kg": w.kg, "date": w.date.format("%b %-d").to_string()}));
+    let last = d.weight_before(day).map(|w| json!({"kg": dec(w.kg, 1), "date": w.date.format("%b %-d").to_string()}));
     let goal = d.body.goal.as_ref().and_then(|g| {
         let p = crate::body::progress(g, &d.weights, today)?;
         (g.start_kg > g.target_kg).then(|| {
@@ -1307,9 +1313,11 @@ fn state(d: &Data, device: &str) -> Value {
         "date": today.to_string(),
         "date_label": now.format("%a %-d %b").to_string(),
         "theme": theme,
-        "calories": {"total": d.calories_on(today), "limit": d.daily_limit(), "recommended": d.recommended_for(today), "entries": entries},
-        "weight": {"today": d.weight_on(today), "last": last, "goal": goal},
-        "journal": {"today": d.journal_on(today), "streak": crate::journal::streak(&d.journal, today),
+        "day": day.to_string(),
+        "day_label": day.format("%A %-d %b").to_string(),
+        "calories": {"total": d.calories_on(day), "limit": d.daily_limit(), "recommended": d.recommended_for(day), "entries": entries},
+        "weight": {"today": d.weight_on(day).map(|k| dec(k, 1)), "last": last, "goal": goal},
+        "journal": {"today": d.journal_on(day), "streak": crate::journal::streak(&d.journal, today),
                     "prompt": crate::journal::PROMPTS[today.format("%j").to_string().parse::<usize>().unwrap_or(0) % crate::journal::PROMPTS.len()],
                     "recent": journal},
         "tasks": tasks,
