@@ -66,6 +66,11 @@ nav button.on { color: var(--text); }
 #queue { color: var(--warning); font-size: 13px; }
 .hidden { display: none !important; }
 .center { text-align: center; }
+.mode { border-radius: 999px; min-height: 0; padding: 6px 12px; font-size: 13px; }
+.mode.claude { color: var(--claude); border-color: var(--claude); }
+.sheet { background: var(--page); border: 1px solid var(--border); border-radius: 12px; padding: 10px; margin: 4px 0 10px; display: grid; gap: 8px; }
+.daylabel { margin: 14px 2px 4px; font-size: 13px; color: var(--muted); }
+.menu .item { cursor: pointer; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .lbl { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .lbl input { width: 100%; box-sizing: border-box; }
@@ -75,12 +80,14 @@ nav button.on { color: var(--text); }
 <main id="app"><p class="muted center" style="margin-top:40vh">Loading Morrowkeep…</p></main>
 <nav id="nav" class="hidden">
   <button data-tab="today"><span class="ic">☀</span>Today</button>
+  <button data-tab="plan"><span class="ic">📅</span>Plan</button>
   <button data-tab="food"><span class="ic">🍴</span>Food</button>
   <button data-tab="journal"><span class="ic">✎</span>Journal</button>
-  <button data-tab="ask"><span class="ic">✦</span>Ask</button>
+  <button data-tab="more"><span class="ic">☰</span>More</button>
 </nav>
 <div id="toast"></div>
 <input type="file" id="labelFile" accept="image/*" capture="environment" hidden>
 <script src="/app.js"></script>
+<script src="/plan.js"></script>
 </body>
 </html>

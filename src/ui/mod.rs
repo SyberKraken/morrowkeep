@@ -1,13 +1,13 @@
 //! The window: top bar, quick-add bar, and the Today / Calendar views.
 
 mod board;
-mod body;
+pub mod body;
 mod charts;
 mod streaks;
 pub mod theme;
 mod dialogs;
 mod foods;
-mod journal;
+pub mod journal;
 mod palettes;
 mod player;
 mod settings;
@@ -348,116 +348,27 @@ impl App {
         }
     }
 
-    /// Today's task best matching `query` for "done …": exact title, then title containing the
-    /// words, among today's occurrences first, then any undone one-off.
-    fn find_task(data: &Data, query: &str) -> Option<usize> {
-        let today = Local::now().date_naive();
-        let q = query.trim().to_lowercase();
-        let todays: Vec<usize> = crate::model::occurrences(&data.items, today, today).into_iter().map(|(_, i)| i).collect();
-        let others: Vec<usize> = (0..data.items.len()).filter(|i| data.items[*i].repeat.is_none() && !data.items[*i].done).collect();
-        let matches = |i: &usize, exact: bool| {
-            let t = data.items[*i].title.to_lowercase();
-            if exact {
-                t == q
-            } else {
-                q.split_whitespace().all(|w| t.contains(w))
-            }
-        };
-        for exact in [true, false] {
-            if let Some(i) = todays.iter().find(|i| matches(i, exact) && !data.items[**i].is_done_on(today)) {
-                return Some(*i);
-            }
-            if let Some(i) = others.iter().find(|i| matches(i, exact)) {
-                return Some(*i);
-            }
-        }
-        None
-    }
-
-    /// Calories, weight, "done …" and food entries typed into the bar (Local mode).
-    /// Returns true if the text was one of those rather than a task.
-    fn run_command(&mut self, data: &mut Data, ctx: &egui::Context, text: &str) -> bool {
-        // "1 serving of kvarg", "200 g chili": foods from the library are logged exactly
-        if let Some((p, amount)) = crate::foods::parse_log(text, &data.foods) {
-            data.log_food(&p, amount);
-            self.quick.clear();
-            return true;
-        }
-        let Some(cmd) = parse_command(text) else { return false };
-        let today = Local::now().date_naive();
-        match cmd {
-            Command::Calories { kcal, what } => self.apply(data, Action::AddCalories(kcal, what)),
-            Command::Weight(kg) if (20.0..=400.0).contains(&kg) => self.apply(data, Action::SetWeight(Some(kg))),
-            Command::Weight(kg) => {
-                data.status = format!("{kg} kg doesn't look like a body weight");
-                return true;
-            }
-            Command::Goal { kg, by } => {
-                let date = match &by {
-                    Some(text) => match crate::parse::parse_date(text, today).filter(|d| *d > today) {
-                        Some(d) => d,
-                        None => {
-                            data.status = format!("Couldn't read \"{text}\" as a future date");
-                            return true;
-                        }
-                    },
-                    None => crate::body::default_target_date(data.current_weight().unwrap_or(kg), kg, today),
-                };
-                if let Err(e) = body::set_goal(data, kg, date) {
-                    data.status = e;
-                    return true;
-                }
-                self.body_ui.reset();
-            }
-            Command::Journal(text) => journal::save_text(data, text, None),
-            Command::Done(q) => match Self::find_task(data, &q) {
-                Some(i) => {
-                    let id = data.items[i].id.clone();
-                    let title = data.items[i].title.clone();
-                    if !data.items[i].is_done_on(today) {
-                        self.apply(data, Action::Toggle(id, today));
-                    }
-                    data.status = format!("✔ {title}");
-                }
-                None => {
-                    data.status = format!("No task matching \"{q}\" today");
-                    return true;
-                }
-            },
-            Command::Food(what) => {
-                self.ask_claude(data, ctx, what, true);
-            }
-        }
-        self.quick.clear();
-        true
-    }
-
     fn quick_add(&mut self, data: &mut Data, ctx: &egui::Context) {
         let text = self.quick.trim().to_string();
         if text.is_empty() {
             return;
         }
-        if self.run_command(data, ctx, &text) {
-            return;
+        let is_goal = matches!(parse_command(&text), Some(Command::Goal { .. }));
+        let today = Local::now().date_naive();
+        match crate::entry::run(data, &text, self.default_day(), today) {
+            crate::entry::Outcome::Done(msg) => {
+                data.status = msg;
+                if is_goal {
+                    self.body_ui.reset();
+                }
+                self.quick.clear();
+            }
+            crate::entry::Outcome::Claude(food) => {
+                self.ask_claude(data, ctx, food, true);
+                self.quick.clear();
+            }
+            crate::entry::Outcome::Error(msg) => data.status = msg,
         }
-        let p = parse_quick(&text, Local::now().date_naive());
-        if p.title.is_empty() {
-            data.status = "Couldn't find a title in that".into();
-            return;
-        }
-        let mut item = Item::new(p.title);
-        if let Some(k) = p.kind {
-            item.kind = k;
-        }
-        item.date = if p.someday { None } else { p.date.or(Some(self.default_day())) };
-        item.time = p.time;
-        item.duration_min = p.duration_min;
-        item.repeat = p.repeat;
-        item.until = p.until;
-        data.status = format!("Added \"{}\"", item.title);
-        data.items.push(item);
-        data.save_items();
-        self.quick.clear();
     }
 
     fn apply(&mut self, data: &mut Data, action: Action) {
@@ -707,7 +618,7 @@ impl App {
                     Command::Journal(text) => format!("» journal entry: {text}"),
                     Command::Goal { kg, by: Some(by) } => format!("» goal {kg:.1} kg by {by}"),
                     Command::Goal { kg, by: None } => format!("» goal {kg:.1} kg (at 0.5 kg/week)"),
-                    Command::Done(q) => match Self::find_task(data, &q) {
+                    Command::Done(q) => match crate::entry::find_task(data, &q, Local::now().date_naive()) {
                         Some(i) => format!("» tick off \"{}\"", data.items[i].title),
                         None => format!("» no task matching \"{q}\" today"),
                     },

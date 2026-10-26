@@ -26,6 +26,8 @@ const APP_JS: &str = include_str!("phone_web/app.js");
 const SW_JS: &str = include_str!("phone_web/sw.js");
 const MANIFEST: &str = include_str!("phone_web/manifest.webmanifest");
 const ICON: &[u8] = include_bytes!("../assets/morrowkeep.png");
+/// The phone app's screens, one file each (they share app.js's helpers).
+const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js"))];
 
 /// How long a pairing code works.
 const PAIR_SECS: u64 = 600;
@@ -241,6 +243,10 @@ fn handle(mut rq: Request, shared: &Arc<Mutex<Data>>, ui: &UiHandle) {
         (Method::Get, "/sw.js") => return respond(rq, 200, "text/javascript; charset=utf-8", SW_JS.as_bytes().to_vec()),
         (Method::Get, "/manifest.webmanifest") => return respond(rq, 200, "application/manifest+json", MANIFEST.as_bytes().to_vec()),
         (Method::Get, "/icon.png") => return respond(rq, 200, "image/png", ICON.to_vec()),
+        (Method::Get, p) if SCRIPTS.iter().any(|(n, _)| *n == p) => {
+            let js = SCRIPTS.iter().find(|(n, _)| *n == p).unwrap().1;
+            return respond(rq, 200, "text/javascript; charset=utf-8", js.as_bytes().to_vec());
+        }
         _ => {}
     }
     if !path.starts_with("/api/") {
@@ -490,6 +496,89 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             Ok(json!({"ok": true}))
         }
 
+        // the entry bar's Local mode, same as on the PC
+        (Method::Post, "/api/entry") => {
+            let text = v["text"].as_str().unwrap_or("");
+            let day = day_of(v, q)?;
+            let mut d = shared.lock().unwrap();
+            match crate::entry::run(&mut d, text, day, today) {
+                crate::entry::Outcome::Done(msg) => done(&mut d, msg),
+                crate::entry::Outcome::Claude(food) => Ok(json!({"claude": food})),
+                crate::entry::Outcome::Error(msg) => Err(bad(msg)),
+            }
+        }
+
+        // the Plan tab: overdue and undated tasks, then the next `days` days
+        (Method::Get, "/api/agenda") => {
+            let days = q.get("days").and_then(|n| n.parse::<i64>().ok()).unwrap_or(14).clamp(1, 60);
+            let d = shared.lock().unwrap();
+            let end = today + Duration::days(days - 1);
+            let mut overdue: Vec<&crate::model::Item> = d.items.iter().filter(|it| it.repeat.is_none() && !it.done && it.date.is_some_and(|x| x < today)).collect();
+            overdue.sort_by_key(|it| it.date);
+            let backlog: Vec<Value> = d.items.iter().filter(|it| it.date.is_none() && !it.done).map(|it| item_json(it, today)).collect();
+            let occ = crate::model::occurrences(&d.items, today, end);
+            let mut list: Vec<Value> = Vec::new();
+            let mut day = today;
+            while day <= end {
+                let mut its: Vec<&crate::model::Item> = occ.iter().filter(|(x, _)| *x == day).map(|(_, i)| &d.items[*i]).collect();
+                its.sort_by_key(|it| (it.time.is_none(), it.time));
+                let label = match (day - today).num_days() {
+                    0 => "Today".to_string(),
+                    1 => "Tomorrow".to_string(),
+                    _ => day.format("%A %-d %b").to_string(),
+                };
+                list.push(json!({"date": day.to_string(), "label": label, "items": its.iter().map(|it| item_json(it, day)).collect::<Vec<_>>()}));
+                day += Duration::days(1);
+            }
+            Ok(json!({"overdue": overdue.iter().map(|it| item_json(it, it.date.unwrap_or(today))).collect::<Vec<_>>(), "backlog": backlog, "days": list}))
+        }
+
+        // edit a task from the phone: title, date (null = backlog), time (null = anytime), category, notes
+        (Method::Post, "/api/task/update") => {
+            let id = v["id"].as_str().ok_or_else(|| bad("Missing task"))?;
+            let mut d = shared.lock().unwrap();
+            let i = d.item_index(id).ok_or_else(|| bad("That task isn't there any more"))?;
+            let it = &mut d.items[i];
+            if let Some(t) = v["title"].as_str() {
+                let t = t.trim();
+                if t.is_empty() {
+                    return Err(bad("The title can't be empty"));
+                }
+                it.title = t.to_string();
+            }
+            match v.get("date") {
+                Some(Value::Null) => it.date = None,
+                Some(Value::String(s)) => it.date = Some(NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| bad("Pick a date"))?),
+                _ => {}
+            }
+            match v.get("time") {
+                Some(Value::Null) => it.time = None,
+                Some(Value::String(s)) if s.is_empty() => it.time = None,
+                Some(Value::String(s)) => it.time = Some(NaiveTime::parse_from_str(s, "%H:%M").map_err(|_| bad("Use a time like 18:30"))?),
+                _ => {}
+            }
+            if let Some(k) = v["kind"].as_str().map(str::trim).filter(|k| !k.is_empty()) {
+                it.kind = k.to_lowercase();
+            }
+            if let Some(n) = v["notes"].as_str() {
+                it.notes = n.trim().to_string();
+            }
+            it.touch();
+            let title = it.title.clone();
+            d.save_items();
+            done(&mut d, format!("saved \"{title}\""))
+        }
+
+        (Method::Post, "/api/task/delete") => {
+            let id = v["id"].as_str().ok_or_else(|| bad("Missing task"))?;
+            let mut d = shared.lock().unwrap();
+            let i = d.item_index(id).ok_or_else(|| bad("That task isn't there any more"))?;
+            let title = d.items[i].title.clone();
+            d.delete_item(id);
+            d.save_items();
+            done(&mut d, format!("deleted \"{title}\""))
+        }
+
         (Method::Post, "/api/calories/delete") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
             let mut d = shared.lock().unwrap();
@@ -504,9 +593,15 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
 
         (Method::Post, "/api/task/toggle") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing task"))?;
-            let day = day_of(v, q)?;
+            // a later day is fine for a one-off task finished early (it counts as done today);
+            // a repeating one is ticked on its own day
+            let later = v["date"].as_str().and_then(|x| NaiveDate::parse_from_str(x, "%Y-%m-%d").ok()).is_some_and(|x| x > today);
+            let day = if later { today } else { day_of(v, q)? };
             let mut d = shared.lock().unwrap();
             let i = d.item_index(id).ok_or_else(|| bad("That task isn't there any more"))?;
+            if later && d.items[i].repeat.is_some() {
+                return Err(bad("Tick off a repeating task on its day"));
+            }
             d.items[i].toggle_done(day);
             let (title, now_done) = (d.items[i].title.clone(), d.items[i].is_done_on(day));
             d.save_items();
@@ -742,6 +837,13 @@ pub fn push_all(shared: &Arc<Mutex<Data>>, payload: &Value) -> usize {
     sent
 }
 
+/// A task for the phone, as it is on `day`.
+fn item_json(it: &crate::model::Item, day: NaiveDate) -> Value {
+    json!({"id": it.id, "title": it.title, "date": it.date.map(|x| x.to_string()), "day": day.to_string(), "time": it.time.map(|t| t.format("%H:%M").to_string()),
+           "duration": it.duration_min, "done": it.is_done_on(day), "kind": it.kind, "color": hex(crate::ui::kind_color(&it.kind)),
+           "icon": crate::categories::icon(&it.kind), "repeat": it.repeat, "notes": it.notes})
+}
+
 fn state(d: &Data, device: &str) -> Value {
     let now = Local::now();
     let today = now.date_naive();
@@ -836,6 +938,7 @@ fn state(d: &Data, device: &str) -> Value {
         "foods": foods,
         "recent_foods": recent_foods,
         "claude": crate::claude::find_cli(&d.settings).is_some(),
+        "categories": crate::categories::names().iter().map(|k| json!({"name": k, "icon": crate::categories::icon(k), "color": hex(crate::ui::kind_color(k))})).collect::<Vec<_>>(),
         "notifications": d.settings.phone_devices.iter().any(|p| p.id == device && p.push.is_some()),
     })
 }

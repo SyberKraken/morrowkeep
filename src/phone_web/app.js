@@ -8,6 +8,7 @@ const S = {
   state: null,
   tab: localStorage.getItem("mk_tab") || "today",
   quickJournal: "",
+  entry: { text: "", mode: localStorage.getItem("mk_mode") || "local" },
   journal: { text: "", mood: null, day: "today", date: "" },
   food: { q: "", sel: null, amount: 1, grams: false, free: "", kcal: "", what: "" },
   ask: { text: "", job: null, food: false, status: null, reply: null, started: 0, error: "" },
@@ -18,6 +19,12 @@ const S = {
   pendingAudio: null,
   busy: false,
 };
+
+// Screens and button actions; plan.js and the other screen files add to these.
+const SCREENS = {};
+const ACTIONS = {};
+// input handlers by element id prefix: INPUTS["lb_"] = (el) => …
+const INPUTS = {};
 
 // ---------------------------------------------------------------- helpers
 
@@ -315,9 +322,57 @@ function tasksCard(st) {
     <span class="muted">${x.repeat ? "↻ " : ""}${esc(x.time || "")}</span></div>`).join("")}</div>`;
 }
 
-function renderToday(st) {
-  return headerHtml() + starsHtml(st) + caloriesCard(st, false) + weightCard(st) + quickJournalCard(st) + tasksCard(st);
+// The entry bar, like the PC's: Local mode understands tasks, "450 kcal pasta", "82.4 kg",
+// "done vacuum", "1 serving kvarg", "journal: …", "goal 76 kg by feb 1"; Claude mode asks Claude.
+function entryCardHtml(st) {
+  const E = S.entry, claude = E.mode === "claude";
+  const hint = claude ? "Ask Claude: \"plan 3 gym sessions this week\", \"I had a burrito\"…"
+    : "gym tomorrow 6pm #workout · 450 kcal pasta · 82.4 kg · done vacuum";
+  return `<div class="card"><div class="row">
+      <button class="mode ${claude ? "claude" : ""}" data-act="entrymode" ${st.claude ? "" : "disabled"}>${claude ? "✦ Claude" : "Local"}</button>
+      <input class="grow" id="entryText" placeholder="${esc(hint)}" value="${esc(E.text)}" enterkeyhint="send" autocomplete="off">
+      <button class="primary" data-act="entryadd" ${claude && S.ask.job ? "disabled" : ""}>${claude ? "Ask" : "Add"}</button></div></div>
+    ${askPreviewHtml()}`;
 }
+
+async function entrySubmit() {
+  const E = S.entry, text = E.text.trim();
+  if (!text) return toast("Type something first");
+  if (E.mode === "claude") return startAsk(text, false).then(() => { E.text = ""; rerender(); });
+  try {
+    const r = await post("/api/entry", { text, date: localDate() });
+    E.text = "";
+    if (r.claude) return startAsk(r.claude, true);
+    toast(r.message || "Saved");
+    await refresh();
+    if (S.tab === "plan" && typeof planLoad === "function") planLoad();
+  } catch (e) {
+    if (e.server) return toast(e.message, 4000);
+    // the PC can't be reached: keep it and send it later
+    const q = queue();
+    q.push({ path: "/api/entry", body: { text, date: localDate(), time: localTime() } });
+    saveQueue(q);
+    E.text = "";
+    toast("Your PC isn't reachable. Saved on the phone, it'll be sent later.", 4000);
+    rerender();
+  }
+}
+
+function renderToday(st) {
+  return headerHtml() + entryCardHtml(st) + starsHtml(st) + caloriesCard(st, false) + weightCard(st) + quickJournalCard(st) + tasksCard(st);
+}
+
+// More: everything that doesn't need a tab of its own
+function renderMore(st) {
+  const row = (tab, ic, title, sub) => `<div class="item" data-act="tab" data-tab="${tab}"><span style="font-size:20px;width:28px">${ic}</span>
+    <div class="grow"><b>${title}</b><div class="muted">${sub}</div></div><span class="muted">›</span></div>`;
+  return headerHtml() + `<div class="card list menu">
+    ${row("ask", "✦", "Ask Claude", "Plan, log or change anything in words")}
+    </div>
+    ${notifPanel()}`;
+}
+
+Object.assign(SCREENS, { today: renderToday, food: renderFood, journal: renderJournal, ask: renderAsk, more: renderMore });
 
 function foodKcal(f, amount, grams) {
   const g = grams ? amount : amount * f.serving_g;
@@ -539,9 +594,11 @@ function render() {
     return;
   }
   nav.classList.remove("hidden");
-  nav.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.tab === S.tab));
   const st = S.state;
-  app.innerHTML = { today: renderToday, food: renderFood, journal: renderJournal, ask: renderAsk }[S.tab](st);
+  // sub-pages of More keep the More button lit
+  const navTab = SCREENS[S.tab] && $(`nav button[data-tab="${S.tab}"]`) ? S.tab : "more";
+  nav.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.tab === navTab));
+  app.innerHTML = (SCREENS[S.tab] || renderToday)(st);
 }
 
 function rerender() {
@@ -687,6 +744,7 @@ document.addEventListener("input", (e) => {
   else if (t.id === "kcalIn") S.food.kcal = t.value;
   else if (t.id === "kcalWhat") S.food.what = t.value;
   else if (t.id.startsWith("lb_") && S.label.food) S.label.food[t.id.slice(3)] = t.value;
+  else if (t.id === "entryText") S.entry.text = t.value;
   else if (t.id === "foodQ") {
     S.food.q = t.value;
     // keep typing in the search box while the list updates
@@ -696,6 +754,11 @@ document.addEventListener("input", (e) => {
     n.focus();
     n.setSelectionRange(pos, pos);
   } else if (t.id === "jdate") S.journal.date = t.value;
+  else { const k = Object.keys(INPUTS).find((p) => t.id.startsWith(p)); if (k) INPUTS[k](t); }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id === "entryText") { e.preventDefault(); entrySubmit(); }
 });
 
 document.addEventListener("change", (e) => {
@@ -706,18 +769,15 @@ document.addEventListener("change", (e) => {
 document.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-act], nav button");
   if (!el) return;
-  if (el.closest("nav")) {
-    S.tab = el.dataset.tab;
-    localStorage.setItem("mk_tab", S.tab);
-    window.scrollTo(0, 0);
-    return rerender();
-  }
+  if (el.closest("nav")) return goTab(el.dataset.tab);
   const act = el.dataset.act;
   const st = S.state;
   switch (act) {
     case "pair": return pair($("#pairCode").value);
     case "retry": return refresh();
-    case "tab": S.tab = el.dataset.tab; localStorage.setItem("mk_tab", S.tab); return rerender();
+    case "tab": return goTab(el.dataset.tab);
+    case "entrymode": S.entry.mode = S.entry.mode === "claude" ? "local" : "claude"; localStorage.setItem("mk_mode", S.entry.mode); return rerender();
+    case "entryadd": return entrySubmit();
     case "weight": {
       const kg = parseFloat((S.weight || "").replace(",", "."));
       if (!(kg >= 20 && kg <= 400)) return toast("Enter your weight in kg, like 82.4");
@@ -807,12 +867,25 @@ document.addEventListener("click", async (e) => {
     case "recstop": return stopRec();
     case "retryaudio": return uploadAudio();
     case "dropaudio": S.pendingAudio = null; return rerender();
+    default: if (ACTIONS[act]) return ACTIONS[act](el, st);
   }
 });
 
+// Screens can load their own data when opened: ONOPEN.plan = () => …
+const ONOPEN = {};
+
+function goTab(tab) {
+  S.tab = tab;
+  localStorage.setItem("mk_tab", tab);
+  window.scrollTo(0, 0);
+  if (ONOPEN[tab]) ONOPEN[tab]();
+  rerender();
+}
+
 // ---------------------------------------------------------------- start
 
-(async function start() {
+// runs once every screen file has loaded
+window.addEventListener("DOMContentLoaded", async function start() {
   const saved = localStorage.getItem("mk_theme");
   if (saved) try { applyTheme(JSON.parse(saved)); } catch (_) {}
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
@@ -820,15 +893,16 @@ document.addEventListener("click", async (e) => {
   if (m) return pair(m[1]);
   // opened from a notification: go to the screen it's about
   const go = new URLSearchParams(location.search).get("go");
-  if (go && ["today", "food", "journal", "ask"].includes(go)) {
+  if (go && SCREENS[go]) {
     S.tab = go;
     localStorage.setItem("mk_tab", go);
     history.replaceState(null, "", "/");
   }
+  if (!SCREENS[S.tab]) S.tab = "today";
   shareToken();
   render();
-  if (S.token) { await refresh(); flushQueue(); }
-})();
+  if (S.token) { await refresh(); flushQueue(); if (ONOPEN[S.tab]) ONOPEN[S.tab](); }
+});
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden && S.token) { refresh(); flushQueue(); } });
 window.addEventListener("online", () => flushQueue());
