@@ -457,6 +457,7 @@ async function saveLabel(andLog) {
   try {
     const r = await post("/api/food/new", body);
     Object.assign(L, { stage: null, job: null, food: null, note: "" });
+    if (S.lib.data) libLoad();
     if (andLog) await send("/api/food", { id: r.id, servings: 1 });
     else { toast(r.message); await refresh(); }
     Object.assign(S.food, { sel: r.id, amount: 1, grams: false });
@@ -467,6 +468,7 @@ async function saveLabel(andLog) {
 }
 
 function renderFood(st) {
+  if (S.foodMode === "library") return renderLibrary(st);
   const F = S.food;
   const foods = st.foods;
   const q = F.q.trim().toLowerCase();
@@ -490,7 +492,7 @@ function renderFood(st) {
       <button class="primary grow" data-act="logfood">Log ${foodKcal(sel, F.amount, F.grams)} kcal</button></div></div>`;
   }
   const askBox = S.ask.food && (S.ask.job || S.ask.reply || S.ask.error) ? askPreviewHtml() : "";
-  return headerHtml() + labelCardHtml(st) + `
+  return headerHtml() + foodModeHtml() + labelCardHtml(st) + `
     <div class="card"><h3>Your foods</h3>
       <input id="foodQ" placeholder="Search your foods…" value="${esc(F.q)}" autocomplete="off">
       <div class="chips" style="margin-top:10px">${list.map((f) => `<button class="chip" data-act="selfood" data-id="${esc(f.id)}" style="${F.sel === f.id ? "border-color:var(--accent)" : ""}">${esc(f.name)} · ${f.kcal_serving}</button>`).join("") ||

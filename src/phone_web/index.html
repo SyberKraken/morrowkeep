@@ -30,7 +30,7 @@ header .brand { font-weight: 600; color: var(--brand); font-size: 18px; }
 .card h3 { margin: 0 0 6px; font-size: 13px; font-weight: 500; color: var(--muted); }
 .big { font-size: 30px; font-weight: 650; line-height: 1.1; }
 .row { display: flex; gap: 8px; align-items: center; }
-.row > .grow { flex: 1; min-width: 0; }
+.row > .grow, .item > .grow { flex: 1; min-width: 0; }
 input, textarea, select { width: 100%; background: var(--input); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font: inherit; }
 textarea { min-height: 84px; resize: vertical; }
 input:focus, textarea:focus, select:focus { outline: 2px solid var(--selection); outline-offset: 0; }
@@ -89,5 +89,6 @@ nav button.on { color: var(--text); }
 <input type="file" id="labelFile" accept="image/*" capture="environment" hidden>
 <script src="/app.js"></script>
 <script src="/plan.js"></script>
+<script src="/foods.js"></script>
 </body>
 </html>

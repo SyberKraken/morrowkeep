@@ -27,7 +27,7 @@ const SW_JS: &str = include_str!("phone_web/sw.js");
 const MANIFEST: &str = include_str!("phone_web/manifest.webmanifest");
 const ICON: &[u8] = include_bytes!("../assets/morrowkeep.png");
 /// The phone app's screens, one file each (they share app.js's helpers).
-const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js"))];
+const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js"))];
 
 /// How long a pairing code works.
 const PAIR_SECS: u64 = 600;
@@ -577,6 +577,106 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             d.delete_item(id);
             d.save_items();
             done(&mut d, format!("deleted \"{title}\""))
+        }
+
+        // the food library: every ingredient and meal, with meals' computed numbers
+        (Method::Get, "/api/foods") => {
+            let d = shared.lock().unwrap();
+            let lib = &d.foods;
+            let meals: Vec<Value> = lib
+                .meals
+                .iter()
+                .map(|m| {
+                    let p = lib.meal_portionable(m);
+                    let (_, total_g) = lib.meal_totals(m);
+                    let mut v = serde_json::to_value(m).unwrap_or(Value::Null);
+                    v["kcal_serving"] = json!(p.kcal(crate::foods::Amount::Servings(1.0)));
+                    v["serving_g"] = json!(p.serving_g.round());
+                    v["kcal_100g"] = json!(p.per100.kcal.round());
+                    v["total_g"] = json!(total_g.round());
+                    v
+                })
+                .collect();
+            Ok(json!({"foods": lib.foods, "meals": meals}))
+        }
+
+        // add or change an ingredient ("food") or a meal; no id = new
+        (Method::Post, "/api/foods/save") => {
+            let item = &v["item"];
+            let name = item["name"].as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("Give it a name"))?.chars().take(60).collect::<String>();
+            let num = |k: &str, max: f64| item[k].as_f64().filter(|n| n.is_finite() && *n >= 0.0 && *n <= max).map(|n| n as f32);
+            let text = |k: &str| item[k].as_str().unwrap_or("").trim().to_string();
+            let aliases: Vec<String> = item["aliases"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default();
+            let id = item["id"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+            let mut d = shared.lock().unwrap();
+            let saved_id = if v["kind"].as_str() == Some("meal") {
+                let ingredients: Vec<crate::foods::Ingredient> = item["ingredients"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|g| Some(crate::foods::Ingredient { food: g["food"].as_str()?.to_string(), grams: g["grams"].as_f64().filter(|x| *x > 0.0 && *x <= 20000.0)? as f32 }))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Some(g) = ingredients.iter().find(|g| d.foods.food(&g.food).is_none()) {
+                    return Err(bad(format!("Ingredient {} isn't in your library", g.food)));
+                }
+                let mut m = id.as_deref().and_then(|i| d.foods.meals.iter().find(|m| m.id == i).cloned()).unwrap_or_else(|| crate::foods::Meal { id: uuid::Uuid::new_v4().to_string(), ..Default::default() });
+                m.name = name;
+                m.aliases = aliases;
+                m.ingredients = ingredients;
+                m.servings = num("servings", 100.0).filter(|s| *s > 0.0).unwrap_or(1.0);
+                m.cooked_g = num("cooked_g", 50000.0).filter(|g| *g > 0.0);
+                m.favorite = item["favorite"].as_bool().unwrap_or(false);
+                m.notes = text("notes");
+                let id = m.id.clone();
+                match d.foods.meals.iter_mut().find(|x| x.id == id) {
+                    Some(x) => *x = m,
+                    None => d.foods.meals.push(m),
+                }
+                id
+            } else {
+                let kcal = num("kcal_per_100g", 900.0).ok_or_else(|| bad("Calories per 100 g must be a number from 0 to 900"))?;
+                let mut f = id.as_deref().and_then(|i| d.foods.food(i).cloned()).unwrap_or_else(|| crate::foods::Food { id: uuid::Uuid::new_v4().to_string(), ..Default::default() });
+                f.name = name;
+                f.aliases = aliases;
+                f.kcal_per_100g = kcal;
+                f.serving_g = num("serving_g", 5000.0).filter(|g| *g >= 1.0).unwrap_or(100.0);
+                f.serving_name = Some(text("serving_name").to_lowercase()).filter(|s| !s.is_empty()).unwrap_or_else(|| "serving".into());
+                f.protein_per_100g = num("protein_per_100g", 100.0);
+                f.carbs_per_100g = num("carbs_per_100g", 100.0);
+                f.fat_per_100g = num("fat_per_100g", 100.0);
+                f.favorite = item["favorite"].as_bool().unwrap_or(false);
+                f.notes = text("notes");
+                let id = f.id.clone();
+                match d.foods.foods.iter_mut().find(|x| x.id == id) {
+                    Some(x) => *x = f,
+                    None => d.foods.foods.push(f),
+                }
+                id
+            };
+            d.save_foods();
+            let r = done(&mut d, "saved to your foods".into())?;
+            Ok(json!({"ok": true, "message": r["message"], "id": saved_id}))
+        }
+
+        (Method::Post, "/api/foods/delete") => {
+            let id = v["id"].as_str().ok_or_else(|| bad("Missing food"))?;
+            let mut d = shared.lock().unwrap();
+            let name = if let Some(i) = d.foods.foods.iter().position(|f| f.id == id) {
+                let f = d.foods.foods.remove(i);
+                // like on the PC: it's taken out of meals that used it
+                for m in &mut d.foods.meals {
+                    m.ingredients.retain(|g| g.food != f.id);
+                }
+                f.name
+            } else if let Some(i) = d.foods.meals.iter().position(|m| m.id == id) {
+                d.foods.meals.remove(i).name
+            } else {
+                return Err(bad("That food isn't in your library any more"));
+            };
+            d.save_foods();
+            done(&mut d, format!("deleted {name}"))
         }
 
         (Method::Post, "/api/calories/delete") => {
