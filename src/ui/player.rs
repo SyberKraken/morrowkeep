@@ -153,20 +153,7 @@ impl Player {
             sets: self.done.clone(),
             completed,
         };
-        data.workout_log.sessions.push(session);
-        data.save_workout_log();
-        data.status = format!("Workout saved: {}", self.name);
-        // a finished workout ticks off its task for today
-        if completed {
-            if let Some(i) = self.task.as_ref().and_then(|id| data.item_index(id)) {
-                let today = Local::now().date_naive();
-                if !data.items[i].is_done_on(today) {
-                    data.items[i].toggle_done(today);
-                    data.save_items();
-                    data.status = format!("Workout saved · ✔ {}", data.items[i].title);
-                }
-            }
-        }
+        data.status = data.record_workout(session, self.task.as_deref());
     }
 
     /// Draws the player. Returns false when it should close.

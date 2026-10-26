@@ -27,7 +27,7 @@ const SW_JS: &str = include_str!("phone_web/sw.js");
 const MANIFEST: &str = include_str!("phone_web/manifest.webmanifest");
 const ICON: &[u8] = include_bytes!("../assets/morrowkeep.png");
 /// The phone app's screens, one file each (they share app.js's helpers).
-const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js"))];
+const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js"))];
 
 /// How long a pairing code works.
 const PAIR_SECS: u64 = 600;
@@ -679,6 +679,103 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             done(&mut d, format!("deleted {name}"))
         }
 
+        // Train tab: workouts and recent sessions
+        (Method::Get, "/api/workouts") => {
+            let d = shared.lock().unwrap();
+            let lib = &d.exercises.exercises;
+            let workouts: Vec<Value> = d
+                .workouts
+                .workouts
+                .iter()
+                .filter(|w| !w.items.is_empty())
+                .map(|w| {
+                    json!({"id": w.id, "name": w.name, "notes": w.notes, "seconds": w.seconds(lib), "exercises": w.exercise_count(),
+                           "equipment": w.equipment(lib).iter().map(|q| crate::workouts::equipment_label(q).to_lowercase()).collect::<Vec<_>>(),
+                           "task": w.task.as_deref().and_then(|id| d.items.iter().find(|i| i.id == id)).map(|i| i.title.clone())})
+                })
+                .collect();
+            let mut sessions: Vec<&crate::workouts::Session> = d.workout_log.sessions.iter().collect();
+            sessions.sort_by(|a, b| (b.date, &b.start).cmp(&(a.date, &a.start)));
+            let history: Vec<Value> = sessions
+                .iter()
+                .take(30)
+                .map(|s| {
+                    let volume: f32 = s.sets.iter().map(|x| x.reps.unwrap_or(0) as f32 * x.kg.unwrap_or(0.0)).sum();
+                    json!({"id": s.id, "date": s.date.to_string(), "start": s.start, "duration_s": s.duration_s, "workout": s.workout,
+                           "sets": s.sets, "completed": s.completed, "volume": volume.round()})
+                })
+                .collect();
+            Ok(json!({"workouts": workouts, "history": history}))
+        }
+
+        // one workout, ready to play: its steps and how to do each exercise
+        (Method::Get, "/api/workout") => {
+            let id = q.get("id").ok_or_else(|| bad("Missing workout"))?;
+            let d = shared.lock().unwrap();
+            let lib = &d.exercises.exercises;
+            let w = d.workouts.workouts.iter().find(|w| w.id == *id).ok_or_else(|| bad("That workout isn't there any more"))?;
+            let steps: Vec<Value> = w
+                .steps(lib)
+                .into_iter()
+                .map(|s| match s {
+                    crate::workouts::Step::Set { exercise, name, set, sets, reps, seconds, kg, per_side } => {
+                        json!({"type": "set", "exercise": exercise, "name": name, "set": set, "sets": sets, "reps": reps, "seconds": seconds, "kg": kg, "per_side": per_side})
+                    }
+                    crate::workouts::Step::Rest { seconds, label } => json!({"type": "rest", "seconds": seconds, "label": label}),
+                })
+                .collect();
+            let mut exercises = serde_json::Map::new();
+            for item in &w.items {
+                if let crate::workouts::Item::Exercise { exercise, .. } = item {
+                    if let Some(e) = lib.iter().find(|e| e.id == *exercise) {
+                        exercises.insert(e.id.clone(), json!({"name": e.name, "steps": e.steps, "form": e.form, "mistakes": e.mistakes, "easier": e.easier,
+                            "harder": e.harder, "muscles_main": e.muscles_main, "muscles_helping": e.muscles_helping,
+                            "equipment": e.equipment.iter().map(|q| crate::workouts::equipment_label(q)).collect::<Vec<_>>()}));
+                    }
+                }
+            }
+            let items: Vec<Value> = w
+                .items
+                .iter()
+                .map(|it| match it {
+                    crate::workouts::Item::Exercise { exercise, sets, reps, seconds, kg, rest_s } => {
+                        let e = lib.iter().find(|e| e.id == *exercise);
+                        json!({"type": "exercise", "exercise": exercise, "name": e.map_or(exercise.as_str(), |e| e.name.as_str()), "sets": sets, "reps": reps,
+                               "seconds": seconds, "kg": kg, "rest_s": rest_s, "per_side": e.is_some_and(|e| e.kind == "reps_per_side")})
+                    }
+                    crate::workouts::Item::Break { seconds, label } => json!({"type": "break", "seconds": seconds, "label": label}),
+                })
+                .collect();
+            Ok(json!({"id": w.id, "name": w.name, "notes": w.notes, "task": w.task, "seconds": w.seconds(lib), "items": items, "steps": steps, "exercises": exercises}))
+        }
+
+        // a workout done on the phone
+        (Method::Post, "/api/workout/session") => {
+            let sets: Vec<crate::workouts::SetDone> = serde_json::from_value(v["sets"].clone()).map_err(|e| bad(format!("sets: {e}")))?;
+            if sets.is_empty() {
+                return Err(bad("No sets were done"));
+            }
+            let workout_id = v["workout_id"].as_str().unwrap_or("").to_string();
+            let day = day_of(v, q)?;
+            let mut d = shared.lock().unwrap();
+            let (name, task) = match d.workouts.workouts.iter().find(|w| w.id == workout_id) {
+                Some(w) => (w.name.clone(), w.task.clone()),
+                None => (v["workout"].as_str().unwrap_or("Workout").to_string(), None),
+            };
+            let session = crate::workouts::Session {
+                id: uuid::Uuid::new_v4().to_string(),
+                date: day,
+                start: v["start"].as_str().filter(|s| NaiveTime::parse_from_str(s, "%H:%M").is_ok()).unwrap_or("00:00").to_string(),
+                duration_s: v["duration_s"].as_u64().unwrap_or(0).min(86_400) as u32,
+                workout_id,
+                workout: name,
+                sets,
+                completed: v["completed"].as_bool().unwrap_or(true),
+            };
+            let msg = d.record_workout(session, task.as_deref());
+            done(&mut d, msg)
+        }
+
         (Method::Post, "/api/calories/delete") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
             let mut d = shared.lock().unwrap();
@@ -956,6 +1053,7 @@ fn state(d: &Data, device: &str) -> Value {
         "success": hex(th.status.success), "danger": hex(th.status.danger), "warning": hex(th.status.warning),
         "brand": hex(th.data.brand), "calories": hex(crate::ui::calorie_color()), "weight": hex(crate::ui::weight_color()),
         "journal": hex(th.data.journal), "goal": hex(th.data.goal), "claude": hex(th.data.claude),
+        "workout": hex(crate::ui::kind_color("workout")), "rest": hex(th.data.rest), "trend": hex(th.data.trend),
     });
 
     // tasks: scheduled first, then anytime (same order as the Habits board)

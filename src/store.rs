@@ -458,6 +458,25 @@ impl Data {
         }
     }
 
+    /// Saves a finished (or ended early) workout; a completed one ticks off its linked task
+    /// for the day. Returns a status message.
+    pub fn record_workout(&mut self, session: crate::workouts::Session, task: Option<&str>) -> String {
+        let (name, day, completed) = (session.workout.clone(), session.date, session.completed);
+        self.workout_log.sessions.push(session);
+        self.save_workout_log();
+        let mut msg = format!("Workout saved: {name}");
+        if completed {
+            if let Some(i) = task.and_then(|id| self.item_index(id)) {
+                if !self.items[i].is_done_on(day) {
+                    self.items[i].toggle_done(day);
+                    self.save_items();
+                    msg = format!("Workout saved · ✔ {}", self.items[i].title);
+                }
+            }
+        }
+        msg
+    }
+
     pub fn save_workout_log(&mut self) {
         if self.load_error.is_some() {
             return;

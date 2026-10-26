@@ -131,7 +131,7 @@ function applyTheme(t) {
   const r = document.documentElement.style;
   const map = { page: "--page", card: "--card", border: "--border", input: "--input", text: "--text", muted: "--muted", fill: "--fill", selection: "--selection",
     accent: "--accent", on_color: "--on-color", success: "--success", danger: "--danger", warning: "--warning", brand: "--brand", calories: "--calories",
-    weight: "--weight", journal: "--journal", goal: "--goal", claude: "--claude" };
+    weight: "--weight", journal: "--journal", goal: "--goal", claude: "--claude", workout: "--workout", rest: "--rest", trend: "--trend" };
   for (const [k, v] of Object.entries(map)) if (t[k]) r.setProperty(v, t[k]);
   document.querySelector('meta[name="theme-color"]').setAttribute("content", t.page);
   localStorage.setItem("mk_theme", JSON.stringify(t));
