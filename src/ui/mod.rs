@@ -9,6 +9,7 @@ mod dialogs;
 mod foods;
 pub mod journal;
 mod palettes;
+mod phone_panel;
 mod player;
 mod settings;
 mod views;
@@ -122,6 +123,9 @@ pub struct App {
     import: Option<ImportDlg>,
     /// The Settings tab (kept while switching tabs, so unsaved changes survive).
     settings: Option<settings::SettingsPage>,
+    /// The "From your phone" panel is open (and the step waiting for "Yes, undo").
+    phone_panel: bool,
+    phone_undo: Option<String>,
     /// Running Claude request: (what was asked, result channel, start time, came from the
     /// calorie card's food box).
     claude_job: Option<(String, mpsc::Receiver<Result<String, String>>, std::time::Instant, bool)>,
@@ -177,6 +181,8 @@ impl App {
             editor: None,
             import: None,
             settings: None,
+            phone_panel: false,
+            phone_undo: None,
             claude_job: None,
             cal_input: CalorieInput::default(),
             theme_version: theme::version(),
@@ -526,6 +532,7 @@ impl App {
                         data.status = if data.settings.pc_only { "Reminders: this PC only".into() } else { "Reminders: phone when you're away from the PC".into() };
                     }
                 }
+                phone_panel::button(ui, data, &mut self.phone_panel);
                 if ui.button("📥 Import").on_hover_text("Paste JSON from your AI tools").clicked() {
                     self.import = Some(ImportDlg::default());
                 }
@@ -788,6 +795,11 @@ impl eframe::App for App {
             ui.add_space(6.0);
         });
 
+        if self.phone_panel {
+            egui::SidePanel::right("from_phone").resizable(true).default_width(340.0).min_width(260.0).show(ctx, |ui| {
+                phone_panel::show(ui, &mut data, &mut self.phone_panel, &mut self.phone_undo)
+            });
+        }
         match self.view {
             View::Today => {
                 egui::SidePanel::right("today_side").resizable(true).default_width(370.0).min_width(300.0).max_width(560.0).show(ctx, |ui| {

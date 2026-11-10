@@ -54,6 +54,37 @@ pub enum Step {
 }
 
 impl Step {
+    /// What the step does, in a few words.
+    pub fn describe(&self) -> String {
+        let quoted = |s: &str| format!("\u{201c}{s}\u{201d}");
+        match self {
+            Step::TaskAdd { item } => format!("Add task {}", quoted(&item.title)),
+            Step::TaskUpdate { title, .. } => format!("Edit task {}", quoted(title)),
+            Step::TaskToggle { .. } | Step::TaskDone { .. } => "Tick off a task".into(),
+            Step::TaskDelete { .. } => "Delete a task".into(),
+            Step::CaloriesAdd { entry } => {
+                let what = if entry.description.is_empty() { String::new() } else { format!(" · {}", entry.description) };
+                format!("+{} kcal{what}", entry.kcal)
+            }
+            Step::FoodLog { .. } => "Log a food".into(),
+            Step::CaloriesDelete { .. } => "Remove a calorie entry".into(),
+            Step::WeightSet { kg: Some(kg), .. } => format!("Weight {kg:.1} kg"),
+            Step::WeightSet { kg: None, .. } => "Remove a weight".into(),
+            Step::GoalSet { kg, .. } => format!("Goal {kg:.1} kg"),
+            Step::JournalAdd { entry } => format!("Journal: {}", quoted(&entry.text.chars().take(40).collect::<String>())),
+            Step::JournalAudio { .. } => "🎤 Voice journal entry".into(),
+            Step::JournalUpdate { .. } => "Edit a journal entry".into(),
+            Step::JournalDelete { .. } => "Delete a journal entry".into(),
+            Step::FoodSave { food } => format!("Save food {}", quoted(&food.name)),
+            Step::MealSave { meal } => format!("Save meal {}", quoted(&meal.name)),
+            Step::FoodDelete { .. } => "Delete a food".into(),
+            Step::WorkoutSession { session } => format!("Workout: {}", session.workout),
+            Step::Claude { text, .. } => format!("Claude: {}", quoted(text)),
+            Step::Label { .. } => "📷 Read a nutrition label".into(),
+            Step::Reflect { .. } => "Reflect on my week (Claude)".into(),
+        }
+    }
+
     /// True for steps only the PC can carry out.
     pub fn needs_pc(&self) -> bool {
         matches!(self, Step::Claude { .. } | Step::Label { .. } | Step::JournalAudio { .. } | Step::Reflect { .. })

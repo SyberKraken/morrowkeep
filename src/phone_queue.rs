@@ -172,15 +172,18 @@ pub fn set_waiting_or_skipped(paths: &Paths, id: &str, skip: bool) {
 
 /// Undoes a step that ran: restores the parts backed up before it (later changes to those parts
 /// are undone too).
-pub fn undo(shared: &Arc<Mutex<Data>>, id: &str) -> Result<String, String> {
-    let paths = shared.lock().unwrap().paths.clone();
+pub fn undo(d: &mut Data, id: &str) -> Result<String, String> {
+    let paths = d.paths.clone();
     let parts = with_queue(&paths, |q| q.steps.iter().find(|s| s.id == id).map(|s| s.undo.clone())).ok_or("That step is gone")?;
     if parts.is_empty() {
         return Err("Nothing was backed up for this step".into());
     }
+    if let Some((_, f)) = parts.iter().find(|(_, f)| !f.exists()) {
+        return Err(format!("the backup {} is gone (the last 20 are kept)", f.display()));
+    }
     for (part, file) in &parts {
         backup::restore(&paths, part, file)?;
-        shared.lock().unwrap().reload_after_restore(part);
+        d.reload_after_restore(part);
     }
     with_queue(&paths, |q| {
         if let Some(s) = q.steps.iter_mut().find(|s| s.id == id) {
