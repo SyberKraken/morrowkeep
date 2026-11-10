@@ -2,18 +2,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backup;
-mod body;
+// shared with the phone app; `crate::parse` etc. keep working
+use morrowkeep_core::{body, foods, journal, model, parse, workouts};
 mod categories;
 mod claude;
 mod entry;
-mod foods;
 mod gcal;
-mod journal;
 mod label;
 mod import;
-mod model;
 mod notify;
-mod parse;
 mod phone;
 mod push;
 mod shortcut;
@@ -23,7 +20,6 @@ mod ui;
 #[cfg(feature = "voice")]
 mod voice;
 mod worker;
-mod workouts;
 
 use eframe::egui;
 use std::sync::{mpsc, Arc, Mutex};

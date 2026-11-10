@@ -138,6 +138,7 @@ static REGISTRY: RwLock<Option<Registry>> = RwLock::new(None);
 /// Makes these categories and colors the ones the app draws with.
 pub fn apply(cats: &[Category], colors: &ColorOverrides) {
     *REGISTRY.write().unwrap() = Some(Registry { cats: cats.to_vec(), colors: colors.clone() });
+    morrowkeep_core::kinds::set(cats.iter().map(|c| c.name.clone()).collect());
 }
 
 fn with<T>(f: impl FnOnce(&Registry) -> T) -> T {

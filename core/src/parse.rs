@@ -349,7 +349,7 @@ pub fn parse_quick(input: &str, today: NaiveDate) -> Parsed {
         }
         if i == 0 {
             if let Some(k) = raw[0].strip_suffix(':').map(|k| k.to_lowercase()) {
-                if crate::categories::get(&k).is_some() {
+                if crate::kinds::is_known(&k) {
                     p.kind = Some(k);
                     i += 1;
                     continue;

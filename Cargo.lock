@@ -2720,6 +2720,7 @@ dependencies = [
  "hkdf",
  "iana-time-zone",
  "image",
+ "morrowkeep-core",
  "open",
  "p256",
  "qrcode",
@@ -2736,6 +2737,16 @@ dependencies = [
  "whisper-rs",
  "windows 0.62.2",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "morrowkeep-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
