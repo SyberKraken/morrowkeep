@@ -12,6 +12,7 @@ mod label;
 mod import;
 mod notify;
 mod phone;
+mod phone_queue;
 mod push;
 mod shortcut;
 mod store;
@@ -62,6 +63,8 @@ fn main() {
     notify::init(shared.clone(), ui_handle.clone());
     let (jobs, rx) = mpsc::channel();
     worker::spawn(shared.clone(), ui_handle.clone(), rx);
+    // steps sent by the phone, run in order
+    phone_queue::start(shared.clone(), ui_handle.clone());
     let tray = tray::create(jobs.clone());
 
     let mut open_window = !hidden || tray.is_none();

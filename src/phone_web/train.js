@@ -248,7 +248,11 @@ async function finishPlayer(completed) {
   if (completed) beep(1320, 450);
   rerender();
   if (P.done.length) {
-    await send("/api/workout/session", { workout_id: P.w.id, workout: P.w.name, date: P.date, time: P.start, start: P.start, duration_s, sets: P.done, completed });
+    if (RP.loaded) {
+      await act(() => makeStep("session", { session: { id: "", date: P.date, start: P.start, duration_s, workout_id: P.w.id, workout: P.w.name, sets: P.done, completed } }), { date: P.date, time: P.start });
+    } else {
+      await send("/api/workout/session", { workout_id: P.w.id, workout: P.w.name, date: P.date, time: P.start, start: P.start, duration_s, sets: P.done, completed });
+    }
     trainLoad();
   }
 }

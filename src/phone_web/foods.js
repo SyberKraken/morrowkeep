@@ -42,7 +42,7 @@ function renderLibrary(st) {
     <input id="lib_q" placeholder="Search ${d.foods.length} ingredient${d.foods.length === 1 ? "" : "s"} and ${d.meals.length} meal${d.meals.length === 1 ? "" : "s"}…" value="${esc(L.q)}" style="margin-top:10px" autocomplete="off">
     <div class="chips" style="margin-top:8px">${chip("all", "All")}${chip("ingredients", "Ingredients")}${chip("meals", "Meals")}${chip("fav", "★")}</div></div>
     <div class="card list">${rows.map((x) => `<div class="item" data-act="libopen" data-id="${esc(x.id)}" data-kind="${x.meal ? "meal" : "food"}">
-      <span style="width:20px">${x.meal ? "🍲" : ""}</span><div class="grow"><div>${esc(x.name)} ${x.favorite ? `<span style="color:var(--warning)">★</span>` : ""}</div>
+      <span style="width:20px">${x.meal ? "🍲" : ""}</span><div class="grow"><div>${esc(x.name)} ${x.favorite ? `<span style="color:var(--warning)">★</span>` : ""}${pend(x.id)}</div>
       <div class="muted">${x.kcal_serving} kcal / ${esc(x.meal ? "serving" : x.serving_name)}${x.meal ? ` · ${x.ingredients.length} ingredients` : ` · ${r1(x.kcal_per_100g)} / 100 g`}</div></div>
       <span class="muted">›</span></div>`).join("") || `<p class="muted">${q ? "Nothing matches." : "Your library is empty."}</p>`}</div>`;
 }
@@ -149,6 +149,21 @@ async function libSave() {
     for (const k of ["kcal_per_100g", "serving_g", "protein_per_100g", "carbs_per_100g", "fat_per_100g"]) item[k] = numOr(E[k]);
     item.serving_name = E.serving_name;
   }
+  if (RP.loaded) {
+    let st;
+    if (E.kind === "meal") {
+      st = makeStep("meal", { meal: { id: item.id || "", name: item.name.trim(), aliases: item.aliases, ingredients: item.ingredients, servings: item.servings > 0 ? item.servings : 1,
+        cooked_g: item.cooked_g > 0 ? item.cooked_g : null, favorite: item.favorite, notes: (item.notes || "").trim() } });
+    } else {
+      if (!(item.kcal_per_100g >= 0 && item.kcal_per_100g <= 900)) return toast("Calories per 100 g must be a number from 0 to 900");
+      const g = (k) => (item[k] >= 0 && item[k] <= 100 ? item[k] : null);
+      st = makeStep("food", { food: { id: item.id || "", name: item.name.trim(), aliases: item.aliases, kcal_per_100g: item.kcal_per_100g, serving_g: item.serving_g >= 1 ? item.serving_g : 100,
+        serving_name: (item.serving_name || "serving").trim().toLowerCase() || "serving", protein_per_100g: g("protein_per_100g"), carbs_per_100g: g("carbs_per_100g"),
+        fat_per_100g: g("fat_per_100g"), favorite: item.favorite, notes: (item.notes || "").trim() } });
+    }
+    if (await doStep(st)) { S.lib.edit = null; libLoad(); }
+    return rerender();
+  }
   try {
     const r = await post("/api/foods/save", { kind: E.kind, item });
     toast(r.message);
@@ -181,6 +196,10 @@ Object.assign(ACTIONS, {
   libaskdelete() { S.lib.confirmDelete = true; rerender(); },
   libnodelete() { S.lib.confirmDelete = false; rerender(); },
   async libdelete() {
+    if (RP.loaded) {
+      if (await doStep({ type: "food_delete", id: S.lib.edit.id })) { S.lib.edit = null; libLoad(); }
+      return rerender();
+    }
     try {
       const r = await post("/api/foods/delete", { id: S.lib.edit.id });
       toast(r.message);

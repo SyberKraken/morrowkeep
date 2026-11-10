@@ -1117,7 +1117,11 @@ fn settings_context(data: &Data) -> Value {
 /// Text to paste into an external AI chat: the format spec plus today's date and the
 /// user's upcoming/backlog items (with ids) so it can plan around them and update them.
 pub fn ai_context(data: &Data, days_ahead: i64) -> String {
-    let now = Local::now();
+    ai_context_at(data, days_ahead, Local::now())
+}
+
+/// The same, as of `now` (a request made on the phone earlier and run later).
+pub fn ai_context_at(data: &Data, days_ahead: i64, now: chrono::DateTime<Local>) -> String {
     let today = now.date_naive();
     let until = today + Duration::days(days_ahead);
     let relevant: Vec<Value> = data

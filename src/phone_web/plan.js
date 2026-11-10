@@ -22,7 +22,7 @@ function planItemHtml(x, overdue) {
   const P = S.plan, key = `${x.id}|${x.day}`, open = P.open === key;
   const row = `<div class="task" data-act="planopen" data-key="${esc(key)}">
     <span class="dot" data-act="plantoggle" data-id="${esc(x.id)}" data-day="${esc(x.day)}" style="border-color:${x.color};background:${x.done ? x.color : "transparent"}">${x.done ? "✓" : ""}</span>
-    <span style="flex:1;${x.done ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(x.icon)} ${esc(x.title)}</span>
+    <span style="flex:1;${x.done ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(x.icon)} ${esc(x.title)}${pend(x.id)}</span>
     <span class="muted">${x.repeat ? "↻ " : ""}${overdue && x.date ? esc(shortDate(x.date)) + " " : ""}${esc(x.time || "")}</span></div>`;
   return row + (open ? planSheetHtml(x) : "");
 }
@@ -88,6 +88,13 @@ Object.assign(ACTIONS, {
   },
   async plantoggle(el) {
     const x = planFind(`${el.dataset.id}|${el.dataset.day}`);
+    if (RP.loaded) {
+      // a later day: fine for a one-off finished early, a repeating one is ticked on its day
+      if (x && x.repeat && el.dataset.day > localDate()) return toast("Tick off a repeating task on its day");
+      const day = el.dataset.day > localDate() ? localDate() : el.dataset.day;
+      await doStep({ type: "task_toggle", id: el.dataset.id, day });
+      return planLoad();
+    }
     if (x) { x.done = !x.done; rerender(); }
     try {
       const r = await post("/api/task/toggle", { id: el.dataset.id, date: el.dataset.day });
@@ -104,6 +111,11 @@ Object.assign(ACTIONS, {
   async plansave(el) {
     const E = S.plan.edit;
     if (!E.title.trim()) return toast("The title can't be empty");
+    if (RP.loaded) {
+      const ok = await doStep({ type: "task_update", id: el.dataset.id, title: E.title, date: E.date || null, time: E.time ? hhmmss(E.time) : null, kind: E.kind, notes: E.notes });
+      if (ok) { Object.assign(S.plan, { open: null, confirmDelete: false }); planLoad(); }
+      return;
+    }
     try {
       const r = await post("/api/task/update", { id: el.dataset.id, title: E.title, date: E.date || null, time: E.time || null, kind: E.kind, notes: E.notes });
       await planChanged(r.message);
@@ -112,6 +124,10 @@ Object.assign(ACTIONS, {
     }
   },
   async plandelete(el) {
+    if (RP.loaded) {
+      if (await doStep({ type: "task_delete", id: el.dataset.id })) { Object.assign(S.plan, { open: null, confirmDelete: false }); planLoad(); }
+      return;
+    }
     try {
       const r = await post("/api/task/delete", { id: el.dataset.id });
       await planChanged(r.message);

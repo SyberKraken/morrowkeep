@@ -19,6 +19,10 @@
 //! - `view` {name, today, …} → a screen (see `views.rs`): state {day}, agenda {days}, foods,
 //!   workouts, workout {id}, progress {days}, journal {q, pinned, voice, before}
 //! - `plan_entry_here` {text, day, today} → like plan_entry, on the kept copy
+//! - `make_step` {kind, …} → a step with new ids, built here so its format is exactly the PC's:
+//!   calories {kcal, description, date, time}, journal {text, mood, date, time, audio_secs?},
+//!   food {food}, meal {meal}, session {session}
+//! - `new_id` → a fresh id
 
 use crate::foods::{Amount, Food, Library};
 use crate::steps::{self, Planned, Snapshot, Step};
@@ -104,8 +108,58 @@ fn dispatch(input: &str) -> Result<Value, String> {
         "food_log" => {
             let food: String = arg(&v, "food")?;
             let date: NaiveDate = arg(&v, "date")?;
-            let time: Option<NaiveTime> = arg(&v, "time")?;
+            let time: Option<NaiveTime> = v["time"].as_str().and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").or_else(|_| NaiveTime::parse_from_str(t, "%H:%M:%S")).ok());
             Ok(json!(Step::FoodLog { id: crate::clock::new_id(), food, servings: arg(&v, "servings")?, grams: arg(&v, "grams")?, date, time }))
+        }
+        "new_id" => Ok(json!(crate::clock::new_id())),
+        "make_step" => {
+            let date: Option<NaiveDate> = v.get("date").and_then(|x| serde_json::from_value(x.clone()).ok());
+            let time: Option<NaiveTime> = v["time"].as_str().and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").ok());
+            let step = match v["kind"].as_str().unwrap_or("") {
+                "calories" => {
+                    let kcal = v["kcal"].as_f64().filter(|k| (1.0..=20000.0).contains(k)).ok_or("Enter calories between 1 and 20000")?.ceil() as u32;
+                    let mut e = crate::model::CalorieEntry::new(date.ok_or("date")?, kcal, v["description"].as_str().unwrap_or("").trim().to_string(), "phone");
+                    e.time = time;
+                    Step::CaloriesAdd { entry: e }
+                }
+                "journal" => {
+                    let mut e = crate::journal::JournalEntry::new(v["text"].as_str().unwrap_or("").trim().to_string());
+                    e.date = date.ok_or("date")?;
+                    e.time = time;
+                    e.mood = v["mood"].as_u64().filter(|m| (1..=5).contains(m)).map(|m| m as u8);
+                    match v["audio_secs"].as_f64() {
+                        Some(secs) => {
+                            e.audio_secs = Some(secs as f32);
+                            Step::JournalAudio { entry: e }
+                        }
+                        None if e.text.is_empty() => return Err("Write something first".into()),
+                        None => Step::JournalAdd { entry: e },
+                    }
+                }
+                "food" => {
+                    let mut f: Food = arg(&v, "food")?;
+                    if f.id.is_empty() {
+                        f.id = crate::clock::new_id();
+                    }
+                    Step::FoodSave { food: f }
+                }
+                "meal" => {
+                    let mut m: crate::foods::Meal = arg(&v, "meal")?;
+                    if m.id.is_empty() {
+                        m.id = crate::clock::new_id();
+                    }
+                    Step::MealSave { meal: m }
+                }
+                "session" => {
+                    let mut s: crate::workouts::Session = arg(&v, "session")?;
+                    if s.id.is_empty() {
+                        s.id = crate::clock::new_id();
+                    }
+                    Step::WorkoutSession { session: s }
+                }
+                other => return Err(format!("unknown kind \"{other}\"")),
+            };
+            Ok(json!(step))
         }
         "load" => {
             let base: Snapshot = arg(&v, "snapshot")?;

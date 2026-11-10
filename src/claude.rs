@@ -151,12 +151,18 @@ fn run(cli: &Path, model: &str, input: String, workdir: &Path, stream: bool) -> 
 
 /// The full request: import format, today's date, current items, and what the user asked.
 pub fn build_prompt(data: &Data, request: &str) -> String {
+    build_prompt_at(data, request, chrono::Local::now())
+}
+
+/// The same, as of `now`: a request made on the phone while the PC was off is answered as if
+/// it were still that moment ("yesterday" means the day before it was written).
+pub fn build_prompt_at(data: &Data, request: &str, now: chrono::DateTime<chrono::Local>) -> String {
     format!(
         "{}\n\n---\n\nThe user's request (typed or dictated, may contain transcription errors):\n\n\"{}\"\n\n\
          Turn it into a Morrowkeep import JSON object. A single simple item becomes a single item. \
          Use \"id\" + changed fields to modify existing items and \"delete\" to remove them, only when the request asks for it. \
          Reply with only the JSON.",
-        import::ai_context(data, 14),
+        import::ai_context_at(data, 14, now),
         request.trim()
     )
 }

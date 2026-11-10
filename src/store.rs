@@ -772,6 +772,11 @@ impl Data {
         morrowkeep_core::steps::apply(self, step, Local::now().date_naive())
     }
 
+    /// The same, for a step made on `today` (a phone step run later).
+    pub fn apply_step_on(&mut self, step: &morrowkeep_core::steps::Step, today: chrono::NaiveDate) -> Result<String, String> {
+        morrowkeep_core::steps::apply(self, step, today)
+    }
+
     pub fn view(&self) -> morrowkeep_core::steps::View<'_> {
         morrowkeep_core::steps::View { items: &self.items, foods: &self.foods, weights: &self.weights }
     }

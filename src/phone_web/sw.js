@@ -2,8 +2,8 @@
 // PC asleep, Morrowkeep closed). Cache first: the saved files are used straight away and refreshed
 // in the background; a new version (new CACHE name) installs as a whole set and is used from the
 // next open. API requests always go to the network.
-const CACHE = "morrowkeep-shell-v12";
-const SHELL = ["/", "/core.js", "/core.wasm", "/app.js", "/replica.js", "/plan.js", "/foods.js", "/train.js", "/progress.js", "/journal.js", "/manifest.webmanifest", "/icon.png"];
+const CACHE = "morrowkeep-shell-v13";
+const SHELL = ["/", "/core.js", "/core.wasm", "/app.js", "/replica.js", "/outbox.js", "/plan.js", "/foods.js", "/train.js", "/progress.js", "/journal.js", "/manifest.webmanifest", "/icon.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

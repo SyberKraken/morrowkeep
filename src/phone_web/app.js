@@ -205,7 +205,7 @@ function headerHtml() {
   const q = queue().length;
   const on = S.state?.notifications;
   return `<header><span class="brand">Morrowkeep</span><span class="muted">${esc(S.state?.date_label || "")}
-    ${q ? `<span id="queue"> · ${q} waiting</span>` : ""}${S.offline ? ` · <span style="color:var(--warning)">PC offline${RP.loaded ? ` · as of ${esc(replicaAge())}` : ""}</span>` : ""}
+    ${q + outboxWaiting().length ? `<span id="queue" data-act="tab" data-tab="outbox"> · ${OB.working ? `PC working · ${OB.working} left` : `${q + outboxWaiting().length} waiting`}</span>` : ""}${S.offline ? ` · <span style="color:var(--warning)">PC offline${RP.loaded ? ` · as of ${esc(replicaAge())}` : ""}</span>` : ""}
     <button class="small" data-act="bell" aria-label="Notifications" style="margin-left:6px;${on ? "" : "opacity:.7"}">${on ? "🔔" : "🔕"}</button></span></header>
     ${S.bellOpen ? notifPanel() : ""}
     ${S.day ? `<div class="card row" style="border-color:var(--warning);padding:8px 12px"><span class="grow">📅 Logging for <b>${esc(S.state?.day_label || S.day)}</b></span>
@@ -307,6 +307,9 @@ function caloriesCard(st, withEntries) {
     frac = Math.min(1, c.total / Math.max(1, target));
   }
   const over = target && c.total > target;
+  // food Claude will estimate once the PC is on
+  const forClaude = outboxWaiting().filter((s) => s.step.type === "claude" && s.step.food).length;
+  if (forClaude) line += ` · + ${forClaude} waiting for Claude`;
   const color = over ? "var(--danger)" : "var(--calories)";
   return `<div class="card"><h3>Calories</h3>
     <div class="row"><span class="big" style="color:${color}">${c.total}</span><span class="muted">kcal${line ? " · " + line : ""}</span></div>
@@ -318,7 +321,7 @@ function caloriesCard(st, withEntries) {
 function entriesList(entries) {
   if (!entries.length) return `<p class="muted">Nothing logged${dayWord()} yet.</p>`;
   return `<div class="list">${entries.map((e) => `<div class="item"><span class="muted" style="width:44px">${esc(e.time || "")}</span>
-    <b style="color:var(--calories);width:70px">${e.kcal} kcal</b><span class="grow" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.description || "")}</span>
+    <b style="color:var(--calories);width:70px">${e.food === LABEL_WAITING ? "? kcal" : e.kcal + " kcal"}</b><span class="grow" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.description || "")}${pend(e.id)}</span>
     <button class="small" data-act="delcal" data-id="${esc(e.id)}" aria-label="Remove">✕</button></div>`).join("")}</div>`;
 }
 
@@ -353,8 +356,23 @@ function tasksCard(st) {
   if (!st.tasks.length) return `<div class="card"><h3>${title}</h3><p class="muted">Nothing planned${dayWord() || " that day"}.</p></div>`;
   return `<div class="card"><h3>${title}</h3>${st.tasks.map((x) => `<div class="task" data-act="toggle" data-id="${esc(x.id)}">
     <span class="dot" style="border-color:${x.color};background:${x.done ? x.color : "transparent"}">${x.done ? "✓" : ""}</span>
-    <span style="flex:1;${x.done ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(x.title)}</span>
+    <span style="flex:1;${x.done ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(x.title)}${pend(x.id)}</span>
     <span class="muted">${x.repeat ? "↻ " : ""}${esc(x.time || "")}</span></div>`).join("")}</div>`;
+}
+
+/// Requests waiting for Claude on the PC (anything but food, which shows on the calorie card).
+function claudeWaitingCard() {
+  const w = outboxWaiting().filter((s) => (s.step.type === "claude" && !s.step.food) || s.step.type === "reflect" || s.step.type === "label");
+  if (!w.length) return "";
+  return `<div class="card" data-act="tab" data-tab="outbox"><h3 style="color:var(--claude)">✦ Waiting for Claude on your PC</h3>
+    ${w.map((s) => `<div class="muted">⏳ ${esc(s.label || describeStep(s.step))}</div>`).join("")}</div>`;
+}
+
+/// Builds a step and queues it; false (with a message) if it can't be made.
+async function act(build, opts) {
+  let st;
+  try { st = build(); } catch (e) { toast(e.message, 4000); return false; }
+  return doStep(st, opts);
 }
 
 // The entry bar, like the PC's: Local mode understands tasks, "450 kcal pasta", "82.4 kg",
@@ -374,6 +392,15 @@ async function entrySubmit() {
   const E = S.entry, text = E.text.trim();
   if (!text) return toast("Type something first");
   if (E.mode === "claude") return startAsk(text, false).then(() => { E.text = ""; rerender(); });
+  if (RP.loaded) {
+    // turned into steps here, by the same rules the PC uses
+    const r = MK.call({ fn: "plan_entry_here", text, day: logDate(), today: localDate() });
+    if (r.error) return toast(r.error, 4000);
+    E.text = "";
+    if (r.claude) return startAsk(r.claude, true);
+    for (const st of r.steps) await doStep(st);
+    return;
+  }
   try {
     const r = await post("/api/entry", { text, date: logDate() });
     E.text = "";
@@ -394,7 +421,7 @@ async function entrySubmit() {
 }
 
 function renderToday(st) {
-  return headerHtml() + daySwitchHtml() + entryCardHtml(st) + starsHtml(st) + caloriesCard(st, !!S.day) + weightCard(st) + quickJournalCard(st) + tasksCard(st);
+  return headerHtml() + daySwitchHtml() + entryCardHtml(st) + claudeWaitingCard() + starsHtml(st) + caloriesCard(st, !!S.day) + weightCard(st) + quickJournalCard(st) + tasksCard(st);
 }
 
 // More: everything that doesn't need a tab of its own
@@ -402,6 +429,7 @@ function renderMore(st) {
   const row = (tab, ic, title, sub) => `<div class="item" data-act="tab" data-tab="${tab}"><span style="font-size:20px;width:28px">${ic}</span>
     <div class="grow"><b>${title}</b><div class="muted">${sub}</div></div><span class="muted">›</span></div>`;
   return headerHtml() + `<div class="card list menu">
+    ${row("outbox", "⏳", `Waiting for PC${outboxWaiting().length ? ` (${outboxWaiting().length})` : ""}`, "What you did while your PC was off, and what it did with it")}
     ${row("progress", "📈", "Progress", "Calories and weight charts, body numbers, habit streaks")}
     ${row("ask", "✦", "Ask Claude", "Plan, log or change anything in words")}
     </div>
@@ -453,16 +481,26 @@ async function labelJpeg(file) {
   return new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.85));
 }
 
+/// A label photo while the PC can't be reached: the food appears as "📷 Label (waiting for
+/// Claude)" (it can be logged already) and is read when the PC is on.
+async function queueLabel(jpeg) {
+  Object.assign(S.label, { stage: null, job: null, food: null, note: "", error: "" });
+  await doStep({ type: "label", food_id: newId() }, { blob: jpeg, label: "📷 Read a nutrition label" });
+}
+
 async function uploadLabel(file) {
   const L = S.label;
+  if (S.offline && RP.loaded) return queueLabel(await labelJpeg(file));
   Object.assign(L, { stage: "reading", job: null, food: null, note: "", error: "" });
   rerender();
+  let jpeg;
   try {
-    const jpeg = await labelJpeg(file);
+    jpeg = await labelJpeg(file);
     const r = await api("/api/food/label", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: jpeg, timeout: 120000 });
     L.job = r.job;
     pollLabel(r.job);
   } catch (e) {
+    if (!e.server && RP.loaded && jpeg) { S.offline = true; return queueLabel(jpeg); }
     Object.assign(L, { stage: "error", error: e.server ? e.message : "Your PC isn't reachable right now. Try again when it's on." });
     rerender();
   }
@@ -494,7 +532,7 @@ async function saveLabel(andLog) {
     const r = await post("/api/food/new", body);
     Object.assign(L, { stage: null, job: null, food: null, note: "" });
     if (S.lib.data) libLoad();
-    if (andLog) await send("/api/food", { id: r.id, servings: 1 });
+    if (andLog) await doStep(MK.call({ fn: "food_log", food: r.id, servings: 1, date: logDate(), time: logTime() }));
     else { toast(r.message); await refresh(); }
     Object.assign(S.food, { sel: r.id, amount: 1, grams: false });
   } catch (e) {
@@ -647,9 +685,17 @@ function rerender() {
 
 // ---------------------------------------------------------------- Claude
 
+/// Claude while the PC can't be reached: queued, carried out (and applied) when it can.
+async function queueClaude(text, food) {
+  if (food) S.food.free = ""; else S.ask.text = "";
+  Object.assign(S.ask, { job: null, reply: null, error: "" });
+  await doStep({ type: "claude", text, food }, { label: `✦ Claude: "${text}"` });
+}
+
 async function startAsk(text, food) {
   text = text.trim();
   if (!text) return toast("Type something first");
+  if (S.offline && RP.loaded) return queueClaude(text, food);
   Object.assign(S.ask, { job: null, food, request: text, reply: null, error: "", started: Date.now() });
   try {
     const r = await post("/api/ask", { text, food });
@@ -658,6 +704,7 @@ async function startAsk(text, food) {
     rerender();
     pollAsk();
   } catch (e) {
+    if (!e.server && RP.loaded) { S.offline = true; return queueClaude(text, food); }
     S.ask.error = e.server ? e.message : "Your PC isn't reachable right now.";
     rerender();
   }
@@ -743,6 +790,19 @@ async function stopRec() {
   const secs = (Date.now() - R.started) / 1000;
   if (secs < 1) { rerender(); return toast("Too short, nothing saved"); }
   const wav = toWav(R.chunks, R.rate);
+  if (RP.loaded) {
+    // text and mood typed alongside go with the recording
+    const quick = R.target === "quick";
+    const day = quick ? logDate() : journalDay();
+    const time = quick ? logTime() : (S.journal.day === "today" ? localTime() : null);
+    try {
+      const st = makeStep("journal", { text: quick ? S.quickJournal : S.journal.text, mood: quick ? null : S.journal.mood, date: day, time, audio_secs: secs });
+      if (await doStep(st, { blob: wav, date: day, time, label: "🎤 Voice journal entry" })) {
+        if (quick) S.quickJournal = ""; else Object.assign(S.journal, { text: "", mood: null });
+      }
+    } catch (e) { toast(e.message, 4000); }
+    return rerender();
+  }
   // text and mood typed alongside go with the recording
   const meta = R.target === "quick"
     ? { text: S.quickJournal, mood: "", date: logDate(), time: logTime() || "" }
@@ -830,28 +890,32 @@ document.addEventListener("click", async (e) => {
     case "weight": {
       const kg = parseFloat((S.weight || "").replace(",", "."));
       if (!(kg >= 20 && kg <= 400)) return toast("Enter your weight in kg, like 82.4");
-      if (await send("/api/weight", { kg }, `Weight ${kg.toFixed(1)} kg saved`)) S.weight = "";
+      if (RP.loaded ? await doStep({ type: "weight_set", day: logDate(), kg }) : await send("/api/weight", { kg }, `Weight ${kg.toFixed(1)} kg saved`)) S.weight = "";
       return rerender();
     }
     case "quickjournal": {
       if (!S.quickJournal.trim()) return toast("Write something first");
-      if (await send("/api/journal", { text: S.quickJournal })) S.quickJournal = "";
+      if (RP.loaded ? await act(() => makeStep("journal", { text: S.quickJournal, date: logDate(), time: logTime() })) : await send("/api/journal", { text: S.quickJournal })) S.quickJournal = "";
       return rerender();
     }
     case "savejournal": {
       const J = S.journal;
       if (!J.text.trim()) return toast("Write something first");
       const day = journalDay();
-      if (await send("/api/journal", { text: J.text, mood: J.mood, date: day, time: J.day === "today" ? localTime() : null })) Object.assign(J, { text: "", mood: null });
+      const time = J.day === "today" ? localTime() : null;
+      const ok = RP.loaded ? await act(() => makeStep("journal", { text: J.text, mood: J.mood, date: day, time }), { date: day, time })
+        : await send("/api/journal", { text: J.text, mood: J.mood, date: day, time });
+      if (ok) Object.assign(J, { text: "", mood: null });
       return rerender();
     }
     case "jmood": { const m = +el.dataset.m; S.journal.mood = S.journal.mood === m ? null : m; return rerender(); }
     case "toggle": {
       const t = st.tasks.find((x) => x.id === el.dataset.id);
       if (t) { t.done = !t.done; rerender(); }
+      if (RP.loaded) return doStep({ type: "task_toggle", id: el.dataset.id, day: logDate() });
       return send("/api/task/toggle", { id: el.dataset.id }, t && t.done ? `✔ ${t.title}` : "Un-ticked");
     }
-    case "delcal": return send("/api/calories/delete", { id: el.dataset.id }, "Removed");
+    case "delcal": return RP.loaded ? doStep({ type: "calories_delete", id: el.dataset.id }) : send("/api/calories/delete", { id: el.dataset.id }, "Removed");
     case "scanlabel": return $("#labelFile").click();
     case "labelsave": return saveLabel(false);
     case "labelsavelog": return saveLabel(true);
@@ -881,13 +945,17 @@ document.addEventListener("click", async (e) => {
     case "logfood": {
       const F = S.food;
       const body = F.grams ? { id: F.sel, grams: F.amount } : { id: F.sel, servings: F.amount };
-      if (await send("/api/food", body)) Object.assign(F, { sel: null, amount: 1, grams: false, q: "" });
+      const ok = RP.loaded ? await doStep(MK.call({ fn: "food_log", food: F.sel, ...(F.grams ? { grams: F.amount } : { servings: F.amount }), date: logDate(), time: logTime() }))
+        : await send("/api/food", body);
+      if (ok) Object.assign(F, { sel: null, amount: 1, grams: false, q: "" });
       return rerender();
     }
     case "addkcal": {
       const kcal = parseInt(S.food.kcal, 10);
       if (!(kcal > 0)) return toast("Enter the calories as a number");
-      if (await send("/api/calories", { kcal, description: S.food.what.trim() })) Object.assign(S.food, { kcal: "", what: "" });
+      const ok = RP.loaded ? await act(() => makeStep("calories", { kcal, description: S.food.what.trim(), date: logDate(), time: logTime() }))
+        : await send("/api/calories", { kcal, description: S.food.what.trim() });
+      if (ok) Object.assign(S.food, { kcal: "", what: "" });
       return rerender();
     }
     case "estimate": return startAsk(S.food.free, true);
@@ -937,6 +1005,7 @@ function goTab(tab) {
 window.addEventListener("DOMContentLoaded", async function start() {
   // Morrowkeep's rules (WebAssembly), from the service worker's copy when offline
   try { await MK.load(await (await fetch("/core.wasm")).arrayBuffer()); } catch (e) { console.warn("core.wasm", e); }
+  await outboxInit();
   await replicaInit();
   drawState();
   const saved = localStorage.getItem("mk_theme");
@@ -954,9 +1023,9 @@ window.addEventListener("DOMContentLoaded", async function start() {
   if (!SCREENS[S.tab]) S.tab = "today";
   shareToken();
   render();
-  if (S.token) { await refresh(); flushQueue(); if (ONOPEN[S.tab]) ONOPEN[S.tab](); }
+  if (S.token) { await refresh(); flushQueue(); outboxFlush(); if (ONOPEN[S.tab]) ONOPEN[S.tab](); }
 });
 
-document.addEventListener("visibilitychange", () => { if (!document.hidden && S.token) { refresh(); flushQueue(); } });
-window.addEventListener("online", () => flushQueue());
-setInterval(() => { if (!document.hidden && S.token) { flushQueue(); refresh(); } }, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.token) { refresh(); flushQueue(); outboxFlush(); } });
+window.addEventListener("online", () => { flushQueue(); outboxFlush(); });
+setInterval(() => { if (!document.hidden && S.token) { flushQueue(); outboxFlush(); refresh(); } }, 30000);

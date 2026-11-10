@@ -31,7 +31,7 @@ const ICON: &[u8] = include_bytes!("../assets/morrowkeep.png");
 /// The phone app's screens, one file each (they share app.js's helpers).
 /// Morrowkeep's rules (morrowkeep-core) as WebAssembly, built by build.rs.
 const CORE_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/core.wasm"));
-const SCRIPTS: &[(&str, &str)] = &[("/core.js", include_str!("phone_web/core.js")), ("/replica.js", include_str!("phone_web/replica.js")), ("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js")), ("/journal.js", include_str!("phone_web/journal.js"))];
+const SCRIPTS: &[(&str, &str)] = &[("/core.js", include_str!("phone_web/core.js")), ("/replica.js", include_str!("phone_web/replica.js")), ("/outbox.js", include_str!("phone_web/outbox.js")), ("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js")), ("/journal.js", include_str!("phone_web/journal.js"))];
 
 /// How long a pairing code works.
 const PAIR_SECS: u64 = 600;
@@ -83,7 +83,7 @@ fn sha(s: &str) -> String {
     Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn repaint(ui: &UiHandle) {
+pub fn repaint(ui: &UiHandle) {
     if let Some(ctx) = ui.lock().unwrap().as_ref() {
         ctx.request_repaint();
     }
@@ -688,7 +688,64 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
         (Method::Get, "/api/sync/snapshot") => {
             let d = shared.lock().unwrap();
             Ok(json!({"snapshot": d.snapshot(Some(today - Duration::days(400))), "pc": pc_info(&d, device), "taken_at": Local::now().to_rfc3339(),
-                      "version": data_version(&d)}))
+                      "version": data_version(&d), "finished": crate::phone_queue::finished_ids(&d.paths, device)}))
+        }
+
+        // steps the phone made (in order); they're kept and run one by one (phone_queue.rs)
+        (Method::Post, "/api/sync/push") => {
+            let mut steps = Vec::new();
+            let mut rejected = Vec::new();
+            for s in v["steps"].as_array().cloned().unwrap_or_default() {
+                let id = s["id"].as_str().unwrap_or("").to_string();
+                if id.is_empty() {
+                    continue;
+                }
+                let parsed = (|| -> Result<crate::phone_queue::Queued, String> {
+                    Ok(crate::phone_queue::Queued {
+                        id: id.clone(),
+                        device: device.to_string(),
+                        seq: s["seq"].as_u64().unwrap_or(0),
+                        at: serde_json::from_value(s["at"].clone()).map_err(|e| format!("at: {e}"))?,
+                        date: serde_json::from_value(s["date"].clone()).map_err(|e| format!("date: {e}"))?,
+                        time: s["time"].as_str().and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").ok()),
+                        step: serde_json::from_value(s["step"].clone()).map_err(|e| format!("step: {e}"))?,
+                        status: Default::default(),
+                        message: String::new(),
+                        done_at: None,
+                        undo: Vec::new(),
+                    })
+                })();
+                match parsed {
+                    Ok(q) => steps.push(q),
+                    Err(e) => rejected.push(json!({"id": id, "error": e})),
+                }
+            }
+            let paths = shared.lock().unwrap().paths.clone();
+            let accepted = crate::phone_queue::push(&paths, steps);
+            Ok(json!({"accepted": accepted, "rejected": rejected}))
+        }
+
+        // a photo or recording for a step, sent before the step itself
+        (Method::Post, "/api/sync/blob") => {
+            let id = q.get("id").ok_or_else(|| bad("Missing step id"))?;
+            if body.is_empty() {
+                return Err(bad("Nothing was sent"));
+            }
+            let path = crate::phone_queue::upload_path(&shared.lock().unwrap().paths, id);
+            let _ = std::fs::create_dir_all(path.parent().unwrap());
+            std::fs::write(&path, &body).map_err(|e| (500, format!("Couldn't save it: {e}")))?;
+            Ok(json!({"ok": true}))
+        }
+
+        // what became of these steps
+        (Method::Get, "/api/sync/status") => {
+            let ids: Vec<String> = q.get("ids").map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect()).unwrap_or_default();
+            let paths = shared.lock().unwrap().paths.clone();
+            let steps: Vec<Value> = crate::phone_queue::status(&paths, &ids)
+                .iter()
+                .map(|s| json!({"id": s.id, "status": s.status, "message": s.message}))
+                .collect();
+            Ok(json!({"steps": steps}))
         }
 
         // cheap check: has anything changed since the phone's copy?
@@ -876,42 +933,43 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
 
 /// A voice journal entry: the phone sends a 16 kHz mono 16-bit WAV. It's saved at once and
 /// transcribed in the background with Whisper.
-fn journal_audio(q: &HashMap<String, String>, body: Vec<u8>, shared: &Arc<Mutex<Data>>, ui: &UiHandle) -> ApiResult {
-    let today = Local::now().date_naive();
+/// The 16 kHz mono samples of a WAV the phone recorded.
+pub fn wav_samples(body: &[u8]) -> Result<Vec<f32>, String> {
     let le16 = |o: usize| u16::from_le_bytes([body[o], body[o + 1]]);
     let le32 = |o: usize| u32::from_le_bytes([body[o], body[o + 1], body[o + 2], body[o + 3]]);
     if body.len() < 44 || &body[..4] != b"RIFF" || &body[8..12] != b"WAVE" || le16(22) != 1 || le32(24) != 16_000 || le16(34) != 16 {
-        return Err(bad("The recording isn't in the expected format"));
+        return Err("The recording isn't in the expected format".into());
     }
     // the samples start after the "data" chunk header (usually at byte 44, later if the
     // format chunk is longer)
     let data_at = (12..body.len().saturating_sub(8)).find(|&i| &body[i..i + 4] == b"data").map(|i| i + 8).unwrap_or(44);
     let samples: Vec<f32> = body[data_at..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0).collect();
     if samples.len() < 8000 {
-        return Err(bad("The recording is too short"));
+        return Err("The recording is too short".into());
     }
-    let empty = Value::Null;
-    let mut e = crate::journal::JournalEntry::new(q.get("text").map(|t| t.trim().to_string()).unwrap_or_default());
-    e.mood = q.get("mood").and_then(|m| m.parse::<u8>().ok()).filter(|m| (1..=5).contains(m));
-    e.date = day_of(&empty, q)?;
-    e.time = time_of(&empty, q).or(if e.date == today { e.time } else { None });
-    let file = format!("{}_phone.wav", Local::now().format("%Y-%m-%d_%H%M%S"));
+    Ok(samples)
+}
+
+/// Saves a phone recording as a journal entry's audio, adds the entry (as a step) and starts
+/// transcribing it in the background. Returns the message for the phone.
+pub fn save_recording(shared: &Arc<Mutex<Data>>, ui: &UiHandle, mut e: crate::journal::JournalEntry, wav: &[u8]) -> Result<String, String> {
+    let samples = wav_samples(wav)?;
+    let file = format!("{}_{}.wav", e.date.format("%Y-%m-%d"), &e.id[..8.min(e.id.len())]);
     let (model, lang, id) = {
         let mut d = shared.lock().unwrap();
         let path = d.paths.journal_audio.join(&file);
         let _ = std::fs::create_dir_all(&d.paths.journal_audio);
-        std::fs::write(&path, &body).map_err(|err| (500, format!("Couldn't save the recording: {err}")))?;
+        std::fs::write(&path, wav).map_err(|err| format!("Couldn't save the recording: {err}"))?;
         e.audio = Some(file);
         e.audio_secs = Some(samples.len() as f32 / 16_000.0);
         let id = e.id.clone();
-        d.journal.push(e);
-        d.save_journal();
+        d.apply_step(&Step::JournalAudio { entry: e })?;
         d.status = "Phone: voice journal entry saved, transcribing…".into();
         repaint(ui);
         (d.paths.models.join(&d.settings.whisper_model), d.settings.voice_language.clone(), id)
     };
     if !cfg!(feature = "voice") || !model.exists() {
-        return Ok(json!({"ok": true, "message": "Recording saved. Download a voice model on your PC (Settings > Input & voice) to transcribe it."}));
+        return Ok("Recording saved. Download a voice model on your PC (Settings > Input & voice) to transcribe it.".into());
     }
     TRANSCRIBING.lock().unwrap().get_or_insert_with(HashSet::new).insert(id.clone());
     #[cfg(feature = "voice")]
@@ -933,7 +991,18 @@ fn journal_audio(q: &HashMap<String, String>, body: Vec<u8>, shared: &Arc<Mutex<
     }
     #[cfg(not(feature = "voice"))]
     let _ = lang;
-    Ok(json!({"ok": true, "message": "Recording saved, transcribing on your PC"}))
+    Ok("Recording saved, transcribing on your PC".into())
+}
+
+fn journal_audio(q: &HashMap<String, String>, body: Vec<u8>, shared: &Arc<Mutex<Data>>, ui: &UiHandle) -> ApiResult {
+    let today = Local::now().date_naive();
+    let empty = Value::Null;
+    let mut e = crate::journal::JournalEntry::new(q.get("text").map(|t| t.trim().to_string()).unwrap_or_default());
+    e.mood = q.get("mood").and_then(|m| m.parse::<u8>().ok()).filter(|m| (1..=5).contains(m));
+    e.date = day_of(&empty, q)?;
+    e.time = time_of(&empty, q).or(if e.date == today { e.time } else { None });
+    let msg = save_recording(shared, ui, e, &body).map_err(bad)?;
+    Ok(json!({"ok": true, "message": msg}))
 }
 
 fn hex(c: eframe::egui::Color32) -> String {

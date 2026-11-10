@@ -42,7 +42,7 @@ const jrDayLabel = (iso) => iso === localDate() ? "Today" : iso === yesterday() 
 
 function jrEntryHtml(e) {
   const J = S.jr;
-  const meta = `${esc(e.time || "–")}${e.mood ? ` · <span style="color:${moodColor(e.mood)}">${esc(e.mood_label)}</span>` : ""}${e.audio_secs ? ` · 🎤 ${mmss(e.audio_secs)}` : ""}${e.pinned ? " · 📌" : ""}${e.kind === "reflection" ? ` · <span style="color:var(--claude)">reflection</span>` : ""}`;
+  const meta = `${esc(e.time || "–")}${e.mood ? ` · <span style="color:${moodColor(e.mood)}">${esc(e.mood_label)}</span>` : ""}${e.audio_secs ? ` · 🎤 ${mmss(e.audio_secs)}` : ""}${e.pinned ? " · 📌" : ""}${e.kind === "reflection" ? ` · <span style="color:var(--claude)">reflection</span>` : ""}${pend(e.id)}`;
   const body = `${e.text ? `<div>${esc(e.text)}</div>` : ""}${e.transcribing ? `<div class="muted"><i>Transcribing on your PC…</i></div>` : e.transcript ? `<div style="font-style:italic">${esc(e.transcript)}</div>` : ""}`;
   if (J.open !== e.id) return `<div class="entry" data-act="jropen" data-id="${esc(e.id)}"><div class="meta">${meta}</div>${body}</div>`;
   const E = J.edit;
@@ -126,14 +126,25 @@ Object.assign(ACTIONS, {
   jrclose() { Object.assign(S.jr, { open: null, edit: null }); rerender(); },
   jremood(el) { const m = +el.dataset.m; S.jr.edit.mood = S.jr.edit.mood === m ? null : m; rerender(); },
   jrpin() { S.jr.edit.pinned = !S.jr.edit.pinned; rerender(); },
-  jrsave() {
+  async jrsave() {
     const E = S.jr.edit, e = jrFind(S.jr.open);
+    if (RP.loaded) {
+      const ok = await doStep({ type: "journal_update", id: S.jr.open, text: E.text, transcript: e && e.audio_secs ? E.transcript : null, mood: E.mood || null, pinned: !!E.pinned });
+      if (ok) { Object.assign(S.jr, { open: null, edit: null, confirmDelete: false }); jrLoad(); }
+      return;
+    }
     const body = { id: S.jr.open, text: E.text, mood: E.mood || 0, pinned: E.pinned };
     if (e && e.audio_secs) body.transcript = E.transcript;
     return jrPost("/api/journal/update", body);
   },
   jraskdelete() { S.jr.confirmDelete = true; rerender(); },
-  jrdelete() { return jrPost("/api/journal/delete", { id: S.jr.open }); },
+  async jrdelete() {
+    if (RP.loaded) {
+      if (await doStep({ type: "journal_delete", id: S.jr.open })) { Object.assign(S.jr, { open: null, edit: null, confirmDelete: false }); jrLoad(); }
+      return;
+    }
+    return jrPost("/api/journal/delete", { id: S.jr.open });
+  },
   jrpinned() { S.jr.pinned = !S.jr.pinned; jrLoad(); },
   jrvoice() { S.jr.voice = !S.jr.voice; jrLoad(); },
   jrtag(el) { const t = "#" + el.dataset.t; S.jr.q = S.jr.q.trim() === t ? "" : t; jrLoad(); },
@@ -149,6 +160,8 @@ Object.assign(ACTIONS, {
     rerender();
   },
   async jrreflect() {
+    // offline: Claude writes it when the PC is on
+    if (S.offline && RP.loaded) return doStep({ type: "reflect", day: localDate() }, { label: "✦ Reflect on my week" });
     S.jr.reflect = { done: false };
     rerender();
     try {

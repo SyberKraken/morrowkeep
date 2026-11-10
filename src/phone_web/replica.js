@@ -31,7 +31,10 @@ const IDB = {
   del: (key, store = "kv") => IDB.tx(store, "readwrite", (s) => s.delete(key)),
 };
 
-const RP = { loaded: false, takenAt: null, version: null, pc: null, fetching: null };
+const RP = { loaded: false, takenAt: null, version: null, pc: null, fetching: null, finished: new Set() };
+
+/// The name label-photo foods have until the PC has read them (as in core/src/api.rs).
+const LABEL_WAITING = "📷 Label (waiting for Claude)";
 
 /// The steps applied on top of the PC's copy (the outbox adds itself here).
 let replicaSteps = () => [];
@@ -50,8 +53,9 @@ function replicaUse(r) {
   MK.kinds = (r.pc.categories || []).map((c) => c.name);
   const res = MK.call({ fn: "load", snapshot: r.snapshot, pc: r.pc });
   if (res.error) throw new Error(res.error);
-  Object.assign(RP, { loaded: true, takenAt: r.taken_at, version: r.version, pc: r.pc });
+  Object.assign(RP, { loaded: true, takenAt: r.taken_at, version: r.version, pc: r.pc, finished: new Set(r.finished || []) });
   if (r.pc.theme) applyTheme(r.pc.theme);
+  if (typeof outboxPurge === "function") outboxPurge();
   replicaProject();
 }
 
