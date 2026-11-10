@@ -27,6 +27,10 @@ pub enum Step {
     TaskDone { id: String, day: NaiveDate },
     TaskDelete { id: String },
     CaloriesAdd { entry: CalorieEntry },
+    /// An amount of a library food or meal; the calories are worked out when the step is applied
+    /// (so a food changed earlier in the queue, or read from a label, counts with its new numbers).
+    /// `id` is the new calorie entry's id.
+    FoodLog { id: String, food: String, servings: Option<f32>, grams: Option<f32>, date: NaiveDate, time: Option<NaiveTime> },
     CaloriesDelete { id: String },
     WeightSet { day: NaiveDate, kg: Option<f32> },
     GoalSet { kg: f32, date: NaiveDate },
@@ -148,6 +152,25 @@ pub fn apply(s: &mut impl Store, step: &Step, today: NaiveDate) -> Result<String
             let what = if entry.description.is_empty() { String::new() } else { format!(" · {}", entry.description) };
             Ok(format!("+{} kcal{what} · {total} kcal {}", entry.kcal, day_words(entry.date, today)))
         }
+        Step::FoodLog { id, food, servings, grams, date, time } => {
+            if let Some(e) = s.calories().iter().find(|c| c.id == *id) {
+                return Ok(format!("+{} kcal · {}", e.kcal, e.description));
+            }
+            let p = s.foods().by_id(food).ok_or("That food isn't in your library any more")?;
+            let amount = match (grams, servings) {
+                (Some(g), _) if *g > 0.0 => Amount::Grams(*g),
+                (_, Some(n)) if *n > 0.0 => Amount::Servings(*n),
+                _ => Amount::Servings(1.0),
+            };
+            let mut e = food_entry(&p, amount, *date, "library");
+            e.id = id.clone();
+            e.time = *time;
+            let msg = format!("+{} kcal · {}", e.kcal, e.description);
+            s.calories().push(e);
+            s.changed(Part::Calories);
+            let total: u32 = s.calories().iter().filter(|c| c.date == *date).map(|c| c.kcal).sum();
+            Ok(format!("{msg} · {total} kcal {}", day_words(*date, today)))
+        }
         Step::CaloriesDelete { id } => {
             let pos = s.calories().iter().position(|c| c.id == *id).ok_or("That calorie entry isn't there any more")?;
             let e = s.calories().remove(pos);
@@ -197,7 +220,7 @@ pub fn apply(s: &mut impl Store, step: &Step, today: NaiveDate) -> Result<String
         Step::JournalUpdate { id, text, transcript, mood, pinned } => {
             let e = s.journal().iter_mut().find(|e| e.id == *id).ok_or("That journal entry isn't there any more")?;
             if e.text != text.trim() || (e.audio.is_some() && transcript.as_deref().map(str::trim) != e.transcript.as_deref()) {
-                e.edited = Some(chrono::Local::now());
+                e.edited = Some(crate::clock::now());
             }
             e.text = text.trim().to_string();
             if e.audio.is_some() {
@@ -319,6 +342,13 @@ pub fn set_goal(body: &mut Body, now_kg: f32, target_kg: f32, target_date: Naive
     Ok(())
 }
 
+/// The current time to the minute (what entries made "now" are stamped with).
+pub fn now_hm() -> NaiveTime {
+    use chrono::Timelike;
+    let t = crate::clock::now().time();
+    NaiveTime::from_hms_opt(t.hour(), t.minute(), 0).unwrap()
+}
+
 /// A calorie entry for an amount of a library food (calories rounded up, grams and macros kept).
 pub fn food_entry(p: &Portionable, amount: Amount, date: NaiveDate, source: &str) -> CalorieEntry {
     let n = p.nutrition(amount);
@@ -359,7 +389,12 @@ pub fn plan_entry(text: &str, day: NaiveDate, today: NaiveDate, v: &View) -> Pla
         return Planned::Error("Type something first".into());
     }
     if let Some((p, amount)) = crate::foods::parse_log(text, v.foods) {
-        return Planned::Steps(vec![Step::CaloriesAdd { entry: food_entry(&p, amount, day, "manual") }]);
+        let (servings, grams) = match amount {
+            Amount::Servings(n) => (Some(n), None),
+            Amount::Grams(g) => (None, Some(g)),
+        };
+        let time = (day == today).then(|| now_hm());
+        return Planned::Steps(vec![Step::FoodLog { id: crate::clock::new_id(), food: p.id, servings, grams, date: day, time }]);
     }
     let step = match parse_command(text) {
         Some(Command::Calories { kcal, what }) => Step::CaloriesAdd { entry: CalorieEntry::new(day, kcal, what, "manual") },
@@ -573,8 +608,16 @@ mod tests {
         apply(&mut s, &Step::MealSave { meal }, today).unwrap();
         // "1 bowl oats" uses the library's numbers
         let st = steps(plan_entry("1 bowl oats", today, today, &s.view()));
-        let Step::CaloriesAdd { entry } = &st[0] else { panic!() };
-        assert_eq!((entry.kcal, entry.grams), (148, Some(40.0)));
+        apply(&mut s, &st[0], today).unwrap();
+        assert_eq!((s.calories[0].kcal, s.calories[0].grams), (148, Some(40.0)));
+        // a food changed before the log is counted with its new numbers
+        let mut oats2 = s.foods.foods[0].clone();
+        oats2.kcal_per_100g = 400.0;
+        apply(&mut s, &Step::FoodSave { food: oats2 }, today).unwrap();
+        let log = Step::FoodLog { id: "e2".into(), food: "oats".into(), servings: Some(1.0), grams: None, date: today, time: None };
+        apply(&mut s, &log, today).unwrap();
+        apply(&mut s, &log, today).unwrap();
+        assert_eq!((s.calories.len(), s.calories[1].kcal), (2, 160));
         // deleting the ingredient takes it out of the meal
         apply(&mut s, &Step::FoodDelete { id: "oats".into() }, today).unwrap();
         assert!(s.foods.meals[0].ingredients.is_empty());

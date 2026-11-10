@@ -62,9 +62,9 @@ fn is_false(b: &bool) -> bool {
 
 impl Item {
     pub fn new(title: impl Into<String>) -> Self {
-        let now = Local::now();
+        let now = crate::clock::now();
         Item {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: crate::clock::new_id(),
             title: title.into(),
             kind: default_kind(),
             date: None,
@@ -86,7 +86,7 @@ impl Item {
     }
 
     pub fn touch(&mut self) {
-        self.updated = Local::now();
+        self.updated = crate::clock::now();
     }
 
     pub fn repeat_rule(&self) -> Option<Repeat> {
@@ -118,7 +118,7 @@ impl Item {
     /// Marks a non-repeating item done or not, recording when it was completed.
     pub fn set_done(&mut self, done: bool) {
         if done && !self.done {
-            self.done_on = Some(Local::now().date_naive());
+            self.done_on = Some(crate::clock::now().date_naive());
         } else if !done {
             self.done_on = None;
         }
@@ -390,9 +390,9 @@ fn manual() -> String {
 
 impl CalorieEntry {
     pub fn new(date: NaiveDate, kcal: u32, description: impl Into<String>, source: &str) -> Self {
-        let now = Local::now();
+        let now = crate::clock::now();
         CalorieEntry {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: crate::clock::new_id(),
             date,
             // log "now" for today's entries; other days have no meaningful time
             time: (date == now.date_naive()).then(|| {

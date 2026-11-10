@@ -916,6 +916,8 @@ function goTab(tab) {
 
 // runs once every screen file has loaded
 window.addEventListener("DOMContentLoaded", async function start() {
+  // Morrowkeep's rules (WebAssembly), from the service worker's copy when offline
+  try { await MK.load(await (await fetch("/core.wasm")).arrayBuffer()); } catch (e) { console.warn("core.wasm", e); }
   const saved = localStorage.getItem("mk_theme");
   if (saved) try { applyTheme(JSON.parse(saved)); } catch (_) {}
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

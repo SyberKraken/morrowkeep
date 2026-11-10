@@ -74,9 +74,9 @@ pub fn time_label(e: &JournalEntry) -> String {
 
 impl JournalEntry {
     pub fn new(text: impl Into<String>) -> Self {
-        let now = Local::now();
+        let now = crate::clock::now();
         JournalEntry {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: crate::clock::new_id(),
             date: now.date_naive(),
             time: Some(now.time()),
             text: text.into(),

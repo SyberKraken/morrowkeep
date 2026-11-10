@@ -28,7 +28,9 @@ const SW_JS: &str = include_str!("phone_web/sw.js");
 const MANIFEST: &str = include_str!("phone_web/manifest.webmanifest");
 const ICON: &[u8] = include_bytes!("../assets/morrowkeep.png");
 /// The phone app's screens, one file each (they share app.js's helpers).
-const SCRIPTS: &[(&str, &str)] = &[("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js")), ("/journal.js", include_str!("phone_web/journal.js"))];
+/// Morrowkeep's rules (morrowkeep-core) as WebAssembly, built by build.rs.
+const CORE_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/core.wasm"));
+const SCRIPTS: &[(&str, &str)] = &[("/core.js", include_str!("phone_web/core.js")), ("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js")), ("/journal.js", include_str!("phone_web/journal.js"))];
 
 /// How long a pairing code works.
 const PAIR_SECS: u64 = 600;
@@ -247,6 +249,7 @@ fn handle(mut rq: Request, shared: &Arc<Mutex<Data>>, ui: &UiHandle) {
         (Method::Get, "/sw.js") => return respond(rq, 200, "text/javascript; charset=utf-8", SW_JS.as_bytes().to_vec()),
         (Method::Get, "/manifest.webmanifest") => return respond(rq, 200, "application/manifest+json", MANIFEST.as_bytes().to_vec()),
         (Method::Get, "/icon.png") => return respond(rq, 200, "image/png", ICON.to_vec()),
+        (Method::Get, "/core.wasm") => return respond(rq, 200, "application/wasm", CORE_WASM.to_vec()),
         (Method::Get, p) if SCRIPTS.iter().any(|(n, _)| *n == p) => {
             let js = SCRIPTS.iter().find(|(n, _)| *n == p).unwrap().1;
             return respond(rq, 200, "text/javascript; charset=utf-8", js.as_bytes().to_vec());
