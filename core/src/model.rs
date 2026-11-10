@@ -5,7 +5,7 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Tim
 use serde::{Deserialize, Serialize};
 
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Item {
     pub id: String,
     pub title: String,
@@ -357,7 +357,7 @@ impl Repeat {
 }
 
 /// One logged food/drink. Daily totals are the sum of a day's entries.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalorieEntry {
     pub id: String,
     pub date: NaiveDate,

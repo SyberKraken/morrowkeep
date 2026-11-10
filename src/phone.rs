@@ -6,6 +6,7 @@
 //! then sends a secret token with every request; only its SHA-256 is stored. Everything goes
 //! through the same data and code as the desktop app, so changes show up on both at once.
 
+use morrowkeep_core::steps::Step;
 use crate::store::Data;
 use crate::worker::UiHandle;
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime};
@@ -307,6 +308,20 @@ fn pair(shared: &Arc<Mutex<Data>>, body: &Value) -> (u16, Value) {
 
 type ApiResult = Result<Value, (u16, String)>;
 
+/// Applies a step (shared with the desktop and, later, the phone's queue) and answers like the
+/// other endpoints: {"ok", "message"} or a 400 with the reason.
+fn step(shared: &Arc<Mutex<Data>>, ui: &UiHandle, st: Step) -> ApiResult {
+    let mut d = shared.lock().unwrap();
+    match d.apply_step(&st) {
+        Ok(msg) => {
+            d.status = format!("Phone: {msg}");
+            repaint(ui);
+            Ok(json!({"ok": true, "message": msg}))
+        }
+        Err(e) => Err(bad(e)),
+    }
+}
+
 fn bad(msg: impl Into<String>) -> (u16, String) {
     (400, msg.into())
 }
@@ -386,9 +401,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
         (Method::Post, "/api/weight") => {
             let kg = v["kg"].as_f64().filter(|k| (20.0..=400.0).contains(k)).ok_or_else(|| bad("Enter a weight between 20 and 400 kg"))? as f32;
             let day = day_of(v, q)?;
-            let mut d = shared.lock().unwrap();
-            d.set_weight(day, Some(kg));
-            done(&mut d, format!("weight {kg:.1} kg"))
+            step(shared, ui, Step::WeightSet { day, kg: Some(kg) })
         }
 
         (Method::Post, "/api/calories") => {
@@ -399,11 +412,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             if let Some(t) = time_of(v, q) {
                 e.time = Some(t);
             }
-            let mut d = shared.lock().unwrap();
-            d.calories.push(e);
-            d.save_calories();
-            let total = d.calories_on(day);
-            done(&mut d, format!("+{kcal} kcal ({total} that day)"))
+            step(shared, ui, Step::CaloriesAdd { entry: e })
         }
 
         (Method::Post, "/api/food") => {
@@ -414,16 +423,12 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
                 _ => crate::foods::Amount::Servings(1.0),
             };
             let day = day_of(v, q)?;
-            let mut d = shared.lock().unwrap();
-            let p = d.foods.by_id(id).ok_or_else(|| bad("That food isn't in your library any more"))?;
+            let p = shared.lock().unwrap().foods.by_id(id).ok_or_else(|| bad("That food isn't in your library any more"))?;
             let mut e = Data::food_entry(&p, amount, day, "phone");
             if let Some(t) = time_of(v, q) {
                 e.time = Some(t);
             }
-            let msg = format!("+{} kcal · {}", e.kcal, e.description);
-            d.calories.push(e);
-            d.save_calories();
-            done(&mut d, msg)
+            step(shared, ui, Step::CaloriesAdd { entry: e })
         }
 
         // a photo of a nutrition label (JPEG from the phone): Claude reads it in the background
@@ -488,9 +493,8 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             if let Some(job) = job {
                 let _ = crate::label::save_photo(&d.paths.root, &food.id, &job.jpeg);
             }
-            let (id, msg) = (food.id.clone(), format!("{} added to your foods", food.name));
-            d.foods.foods.push(food);
-            d.save_foods();
+            let id = food.id.clone();
+            let msg = d.apply_step(&Step::FoodSave { food }).map_err(bad)?;
             d.status = format!("Phone: {msg}");
             repaint(ui);
             Ok(json!({"ok": true, "message": msg, "id": id}))
@@ -542,48 +546,37 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
 
         // edit a task from the phone: title, date (null = backlog), time (null = anytime), category, notes
         (Method::Post, "/api/task/update") => {
-            let id = v["id"].as_str().ok_or_else(|| bad("Missing task"))?;
-            let mut d = shared.lock().unwrap();
-            let i = d.item_index(id).ok_or_else(|| bad("That task isn't there any more"))?;
-            let it = &mut d.items[i];
-            if let Some(t) = v["title"].as_str() {
-                let t = t.trim();
-                if t.is_empty() {
-                    return Err(bad("The title can't be empty"));
+            let id = v["id"].as_str().ok_or_else(|| bad("Missing task"))?.to_string();
+            // fields not sent keep their current value
+            let st = {
+                let d = shared.lock().unwrap();
+                let it = d.items.iter().find(|i| i.id == id).ok_or_else(|| bad("That task isn't there any more"))?;
+                let date = match v.get("date") {
+                    Some(Value::Null) => None,
+                    Some(Value::String(s)) => Some(NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| bad("Pick a date"))?),
+                    _ => it.date,
+                };
+                let time = match v.get("time") {
+                    Some(Value::Null) => None,
+                    Some(Value::String(s)) if s.is_empty() => None,
+                    Some(Value::String(s)) => Some(NaiveTime::parse_from_str(s, "%H:%M").map_err(|_| bad("Use a time like 18:30"))?),
+                    _ => it.time,
+                };
+                Step::TaskUpdate {
+                    id: id.clone(),
+                    title: v["title"].as_str().map_or(it.title.clone(), str::to_string),
+                    date,
+                    time,
+                    kind: v["kind"].as_str().map_or(it.kind.clone(), str::to_string),
+                    notes: v["notes"].as_str().map_or(it.notes.clone(), str::to_string),
                 }
-                it.title = t.to_string();
-            }
-            match v.get("date") {
-                Some(Value::Null) => it.date = None,
-                Some(Value::String(s)) => it.date = Some(NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| bad("Pick a date"))?),
-                _ => {}
-            }
-            match v.get("time") {
-                Some(Value::Null) => it.time = None,
-                Some(Value::String(s)) if s.is_empty() => it.time = None,
-                Some(Value::String(s)) => it.time = Some(NaiveTime::parse_from_str(s, "%H:%M").map_err(|_| bad("Use a time like 18:30"))?),
-                _ => {}
-            }
-            if let Some(k) = v["kind"].as_str().map(str::trim).filter(|k| !k.is_empty()) {
-                it.kind = k.to_lowercase();
-            }
-            if let Some(n) = v["notes"].as_str() {
-                it.notes = n.trim().to_string();
-            }
-            it.touch();
-            let title = it.title.clone();
-            d.save_items();
-            done(&mut d, format!("saved \"{title}\""))
+            };
+            step(shared, ui, st)
         }
 
         (Method::Post, "/api/task/delete") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing task"))?;
-            let mut d = shared.lock().unwrap();
-            let i = d.item_index(id).ok_or_else(|| bad("That task isn't there any more"))?;
-            let title = d.items[i].title.clone();
-            d.delete_item(id);
-            d.save_items();
-            done(&mut d, format!("deleted \"{title}\""))
+            step(shared, ui, Step::TaskDelete { id: id.to_string() })
         }
 
         // the food library: every ingredient and meal, with meals' computed numbers
@@ -637,10 +630,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
                 m.favorite = item["favorite"].as_bool().unwrap_or(false);
                 m.notes = text("notes");
                 let id = m.id.clone();
-                match d.foods.meals.iter_mut().find(|x| x.id == id) {
-                    Some(x) => *x = m,
-                    None => d.foods.meals.push(m),
-                }
+                d.apply_step(&Step::MealSave { meal: m }).map_err(bad)?;
                 id
             } else {
                 let kcal = num("kcal_per_100g", 900.0).ok_or_else(|| bad("Calories per 100 g must be a number from 0 to 900"))?;
@@ -656,34 +646,16 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
                 f.favorite = item["favorite"].as_bool().unwrap_or(false);
                 f.notes = text("notes");
                 let id = f.id.clone();
-                match d.foods.foods.iter_mut().find(|x| x.id == id) {
-                    Some(x) => *x = f,
-                    None => d.foods.foods.push(f),
-                }
+                d.apply_step(&Step::FoodSave { food: f }).map_err(bad)?;
                 id
             };
-            d.save_foods();
             let r = done(&mut d, "saved to your foods".into())?;
             Ok(json!({"ok": true, "message": r["message"], "id": saved_id}))
         }
 
         (Method::Post, "/api/foods/delete") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing food"))?;
-            let mut d = shared.lock().unwrap();
-            let name = if let Some(i) = d.foods.foods.iter().position(|f| f.id == id) {
-                let f = d.foods.foods.remove(i);
-                // like on the PC: it's taken out of meals that used it
-                for m in &mut d.foods.meals {
-                    m.ingredients.retain(|g| g.food != f.id);
-                }
-                f.name
-            } else if let Some(i) = d.foods.meals.iter().position(|m| m.id == id) {
-                d.foods.meals.remove(i).name
-            } else {
-                return Err(bad("That food isn't in your library any more"));
-            };
-            d.save_foods();
-            done(&mut d, format!("deleted {name}"))
+            step(shared, ui, Step::FoodDelete { id: id.to_string() })
         }
 
         // Train tab: workouts and recent sessions
@@ -765,9 +737,9 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             let workout_id = v["workout_id"].as_str().unwrap_or("").to_string();
             let day = day_of(v, q)?;
             let mut d = shared.lock().unwrap();
-            let (name, task) = match d.workouts.workouts.iter().find(|w| w.id == workout_id) {
-                Some(w) => (w.name.clone(), w.task.clone()),
-                None => (v["workout"].as_str().unwrap_or("Workout").to_string(), None),
+            let name = match d.workouts.workouts.iter().find(|w| w.id == workout_id) {
+                Some(w) => w.name.clone(),
+                None => v["workout"].as_str().unwrap_or("Workout").to_string(),
             };
             let session = crate::workouts::Session {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -779,7 +751,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
                 sets,
                 completed: v["completed"].as_bool().unwrap_or(true),
             };
-            let msg = d.record_workout(session, task.as_deref());
+            let msg = d.record_workout(session);
             done(&mut d, msg)
         }
 
@@ -881,34 +853,28 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
         }
 
         (Method::Post, "/api/journal/update") => {
-            let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
-            let mut d = shared.lock().unwrap();
-            let e = d.journal.iter_mut().find(|e| e.id == id).ok_or_else(|| bad("That entry isn't there any more"))?;
-            if let Some(t) = v["text"].as_str() {
-                e.text = t.trim().to_string();
-                e.edited = Some(Local::now());
-            }
-            if let (Some(t), true) = (v["transcript"].as_str(), e.audio.is_some()) {
-                e.transcript = Some(t.trim().to_string());
-                e.edited = Some(Local::now());
-            }
-            if let Some(m) = v["mood"].as_u64() {
-                e.mood = (1..=5).contains(&m).then_some(m as u8);
-            }
-            if let Some(p) = v["pinned"].as_bool() {
-                e.pinned = p;
-            }
-            d.save_journal();
-            done(&mut d, "journal entry saved".into())
+            let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?.to_string();
+            // fields not sent keep their current value
+            let st = {
+                let d = shared.lock().unwrap();
+                let e = d.journal.iter().find(|e| e.id == id).ok_or_else(|| bad("That entry isn't there any more"))?;
+                Step::JournalUpdate {
+                    id: id.clone(),
+                    text: v["text"].as_str().map_or(e.text.clone(), str::to_string),
+                    transcript: v["transcript"].as_str().map(str::to_string).or(e.transcript.clone()),
+                    mood: match v.get("mood").and_then(Value::as_u64) {
+                        Some(m) => (1..=5).contains(&m).then_some(m as u8),
+                        None => e.mood,
+                    },
+                    pinned: v["pinned"].as_bool().unwrap_or(e.pinned),
+                }
+            };
+            step(shared, ui, st)
         }
 
         (Method::Post, "/api/journal/delete") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
-            let mut d = shared.lock().unwrap();
-            if !d.delete_journal_entry(id) {
-                return Err(bad("That entry isn't there any more"));
-            }
-            done(&mut d, "journal entry deleted".into())
+            step(shared, ui, Step::JournalDelete { id: id.to_string() })
         }
 
         // "Reflect on my week": Claude writes a short reflection, added to today's journal
@@ -949,14 +915,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
 
         (Method::Post, "/api/calories/delete") => {
             let id = v["id"].as_str().ok_or_else(|| bad("Missing entry"))?;
-            let mut d = shared.lock().unwrap();
-            let before = d.calories.len();
-            d.calories.retain(|c| c.id != id);
-            if d.calories.len() == before {
-                return Err(bad("That entry is already gone"));
-            }
-            d.save_calories();
-            done(&mut d, "calorie entry removed".into())
+            step(shared, ui, Step::CaloriesDelete { id: id.to_string() })
         }
 
         (Method::Post, "/api/task/toggle") => {
@@ -965,15 +924,10 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             // a repeating one is ticked on its own day
             let later = v["date"].as_str().and_then(|x| NaiveDate::parse_from_str(x, "%Y-%m-%d").ok()).is_some_and(|x| x > today);
             let day = if later { today } else { day_of(v, q)? };
-            let mut d = shared.lock().unwrap();
-            let i = d.item_index(id).ok_or_else(|| bad("That task isn't there any more"))?;
-            if later && d.items[i].repeat.is_some() {
+            if later && shared.lock().unwrap().items.iter().any(|i| i.id == id && i.repeat.is_some()) {
                 return Err(bad("Tick off a repeating task on its day"));
             }
-            d.items[i].toggle_done(day);
-            let (title, now_done) = (d.items[i].title.clone(), d.items[i].is_done_on(day));
-            d.save_items();
-            done(&mut d, format!("{} {title}", if now_done { "✔" } else { "un-ticked" }))
+            step(shared, ui, Step::TaskToggle { id: id.to_string(), day })
         }
 
         (Method::Post, "/api/journal") => {
@@ -985,10 +939,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             e.mood = v["mood"].as_u64().filter(|m| (1..=5).contains(m)).map(|m| m as u8);
             e.date = day_of(v, q)?;
             e.time = time_of(v, q).or(if e.date == today { e.time } else { None });
-            let mut d = shared.lock().unwrap();
-            d.journal.push(e);
-            d.save_journal();
-            done(&mut d, "journal entry saved".into())
+            step(shared, ui, Step::JournalAdd { entry: e })
         }
 
         (Method::Post, "/api/journal/audio") => journal_audio(q, body, shared, ui),

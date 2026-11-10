@@ -618,7 +618,7 @@ impl App {
                     Command::Journal(text) => format!("» journal entry: {text}"),
                     Command::Goal { kg, by: Some(by) } => format!("» goal {kg:.1} kg by {by}"),
                     Command::Goal { kg, by: None } => format!("» goal {kg:.1} kg (at 0.5 kg/week)"),
-                    Command::Done(q) => match crate::entry::find_task(data, &q, Local::now().date_naive()) {
+                    Command::Done(q) => match morrowkeep_core::steps::find_task(&data.items, &q, Local::now().date_naive()) {
                         Some(i) => format!("» tick off \"{}\"", data.items[i].title),
                         None => format!("» no task matching \"{q}\" today"),
                     },

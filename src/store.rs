@@ -475,34 +475,13 @@ impl Data {
 
     /// Deletes a journal entry; its recording is moved to journal-audio/deleted, not destroyed.
     pub fn delete_journal_entry(&mut self, id: &str) -> bool {
-        let Some(pos) = self.journal.iter().position(|e| e.id == id) else { return false };
-        let e = self.journal.remove(pos);
-        if let Some(file) = e.audio {
-            let deleted = self.paths.journal_audio.join("deleted");
-            let _ = std::fs::create_dir_all(&deleted);
-            let _ = std::fs::rename(self.paths.journal_audio.join(&file), deleted.join(&file));
-        }
-        self.save_journal();
-        true
+        self.apply_step(&morrowkeep_core::steps::Step::JournalDelete { id: id.to_string() }).is_ok()
     }
 
     /// Saves a finished (or ended early) workout; a completed one ticks off its linked task
     /// for the day. Returns a status message.
-    pub fn record_workout(&mut self, session: crate::workouts::Session, task: Option<&str>) -> String {
-        let (name, day, completed) = (session.workout.clone(), session.date, session.completed);
-        self.workout_log.sessions.push(session);
-        self.save_workout_log();
-        let mut msg = format!("Workout saved: {name}");
-        if completed {
-            if let Some(i) = task.and_then(|id| self.item_index(id)) {
-                if !self.items[i].is_done_on(day) {
-                    self.items[i].toggle_done(day);
-                    self.save_items();
-                    msg = format!("Workout saved · ✔ {}", self.items[i].title);
-                }
-            }
-        }
-        msg
+    pub fn record_workout(&mut self, session: crate::workouts::Session) -> String {
+        self.apply_step(&morrowkeep_core::steps::Step::WorkoutSession { session }).unwrap_or_else(|e| e)
     }
 
     pub fn save_workout_log(&mut self) {
@@ -529,13 +508,7 @@ impl Data {
 
     /// A calorie entry for an amount of a library food or meal (not yet added).
     pub fn food_entry(p: &crate::foods::Portionable, amount: crate::foods::Amount, date: chrono::NaiveDate, source: &str) -> CalorieEntry {
-        let n = p.nutrition(amount);
-        let mut e = CalorieEntry::new(date, p.kcal(amount), format!("{} · {}", p.name, p.describe(amount)), source);
-        e.food = Some(p.name.clone());
-        e.grams = Some((p.grams(amount) * 10.0).round() / 10.0);
-        let r = |v: Option<f32>| v.map(|g| (g * 10.0).round() / 10.0);
-        (e.protein, e.carbs, e.fat) = (r(n.protein), r(n.carbs), r(n.fat));
-        e
+        morrowkeep_core::steps::food_entry(p, amount, date, source)
     }
 
     /// Logs an amount of a library food for today; returns the status message.
@@ -831,5 +804,73 @@ mod tests {
         assert_eq!(days_in_month(d), 31);
         assert_eq!(days_in_month(chrono::NaiveDate::from_ymd_opt(2028, 2, 3).unwrap()), 29);
         assert_eq!(days_in_month(chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap()), 31);
+    }
+}
+
+// ---------------------------------------------------------------- steps
+
+/// The PC's data as a place to apply steps (shared with the phone, see `morrowkeep_core::steps`):
+/// a changed part is saved to its file, a deleted task's Google event is remembered for
+/// deletion, a deleted journal entry's recording is moved aside.
+impl morrowkeep_core::steps::Store for Data {
+    fn items(&mut self) -> &mut Vec<Item> {
+        &mut self.items
+    }
+    fn calories(&mut self) -> &mut Vec<CalorieEntry> {
+        &mut self.calories
+    }
+    fn weights(&mut self) -> &mut Vec<WeightEntry> {
+        &mut self.weights
+    }
+    fn body(&mut self) -> &mut crate::body::Body {
+        &mut self.body
+    }
+    fn journal(&mut self) -> &mut Vec<crate::journal::JournalEntry> {
+        &mut self.journal
+    }
+    fn foods(&mut self) -> &mut crate::foods::Library {
+        &mut self.foods
+    }
+    fn workout_log(&mut self) -> &mut crate::workouts::WorkoutLog {
+        &mut self.workout_log
+    }
+    fn workout_task(&self, workout_id: &str) -> Option<String> {
+        self.workouts.workouts.iter().find(|w| w.id == workout_id).and_then(|w| w.task.clone())
+    }
+    fn changed(&mut self, part: morrowkeep_core::steps::Part) {
+        use morrowkeep_core::steps::Part;
+        match part {
+            Part::Items => self.save_items(),
+            Part::Calories => self.save_calories(),
+            Part::Weight => self.save_weight(),
+            Part::Body => self.save_body(),
+            Part::Journal => self.save_journal(),
+            Part::Foods => self.save_foods(),
+            Part::WorkoutLog => self.save_workout_log(),
+        }
+    }
+    fn task_removed(&mut self, item: &Item) {
+        if let Some(gid) = &item.google_id {
+            self.sync.pending_deletes.push(gid.clone());
+            self.save_sync();
+        }
+    }
+    fn journal_removed(&mut self, e: &crate::journal::JournalEntry) {
+        if let Some(file) = &e.audio {
+            let deleted = self.paths.journal_audio.join("deleted");
+            let _ = std::fs::create_dir_all(&deleted);
+            let _ = std::fs::rename(self.paths.journal_audio.join(file), deleted.join(file));
+        }
+    }
+}
+
+impl Data {
+    /// Applies a step to the PC's data; see `morrowkeep_core::steps`.
+    pub fn apply_step(&mut self, step: &morrowkeep_core::steps::Step) -> Result<String, String> {
+        morrowkeep_core::steps::apply(self, step, Local::now().date_naive())
+    }
+
+    pub fn view(&self) -> morrowkeep_core::steps::View<'_> {
+        morrowkeep_core::steps::View { items: &self.items, foods: &self.foods, weights: &self.weights }
     }
 }

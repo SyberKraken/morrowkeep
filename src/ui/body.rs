@@ -1,7 +1,7 @@
 //! Body tab: profile, the numbers derived from it, the goal weight plan, the daily calorie
 //! limit it produces (or the fallback limit) and the burn measured from your own logs.
 
-use crate::body::{self, Activity, Goal, Mode, Sex};
+use crate::body::{self, Activity, Mode, Sex};
 use crate::store::Data;
 use chrono::{Local, NaiveDate};
 use eframe::egui::{self, RichText, Ui};
@@ -43,21 +43,7 @@ impl BodyUi {
 pub fn set_goal(data: &mut Data, target_kg: f32, target_date: NaiveDate) -> Result<(), String> {
     let today = Local::now().date_naive();
     let now = data.current_weight().ok_or("Log your weight first, so the goal has a starting point")?;
-    if !(30.0..=300.0).contains(&target_kg) {
-        return Err(format!("{target_kg} kg doesn't look like a goal weight"));
-    }
-    match &mut data.body.goal {
-        Some(g) if g.reached_on.is_none() => {
-            g.target_kg = target_kg;
-            g.target_date = target_date;
-        }
-        slot => {
-            if let Some(old) = slot.take() {
-                data.body.past_goals.push(old);
-            }
-            *slot = Some(Goal { target_kg, target_date, set_on: today, start_kg: now, reached_on: None });
-        }
-    }
+    morrowkeep_core::steps::set_goal(&mut data.body, now, target_kg, target_date, today)?;
     data.save_body();
     data.status = format!("Goal set: {target_kg:.1} kg by {}", target_date.format("%b %-d, %Y"));
     Ok(())

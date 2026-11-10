@@ -8,4 +8,5 @@ pub mod journal;
 pub mod kinds;
 pub mod model;
 pub mod parse;
+pub mod steps;
 pub mod workouts;
