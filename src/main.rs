@@ -65,6 +65,8 @@ fn main() {
     worker::spawn(shared.clone(), ui_handle.clone(), rx);
     // steps sent by the phone, run in order
     phone_queue::start(shared.clone(), ui_handle.clone());
+    // phones with steps waiting send them now
+    phone_queue::announce_pc_on(shared.clone());
     let tray = tray::create(jobs.clone());
 
     let mut open_window = !hidden || tray.is_none();

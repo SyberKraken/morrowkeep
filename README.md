@@ -199,8 +199,33 @@ Setup, once:
 5. Add it to your home screen: Safari → Share → **Add to Home Screen**, or Chrome → ⋮ →
    **Install app**. Allow the microphone the first time you record.
 
-The PC needs to be on with Morrowkeep running (the tray is enough). Entries made while it can't
-be reached wait on the phone and are sent later, each with the day and time it was made.
+### Using the phone without the PC
+
+The phone app works on its own too: with Tailscale off, the PC asleep or Morrowkeep closed.
+
+- **It opens and shows your data.** The phone keeps a copy of your data (the app's files and the
+  data in the browser's storage). Every screen is drawn from that copy by the same rules the PC
+  uses (Morrowkeep's core, compiled to WebAssembly), so what you see is what the PC would show.
+  The header says "PC offline · as of 14:02" while the copy is old.
+- **Everything you do counts at once.** Each change (calories, foods, weight, tasks, journal,
+  recordings, workouts, library edits, the entry bar) is a step: the phone applies it to its copy
+  straight away, so counters go up and a task you made offline can be ticked off offline.
+- **It's sent later, in order.** The steps wait on the phone (More › Waiting for PC) and are sent
+  when the PC can be reached. The PC runs them one by one in the order you made them, each as of
+  the day and time you made it ("450 kcal" typed Monday at 23:50 stays on Monday), and the phone
+  then shows the PC's results. Nothing is applied twice, even if it's sent twice.
+- **Claude waits for the PC.** Offline, Claude requests, label photos and "Reflect on my week" are
+  queued too ("+ 1 waiting for Claude", "? kcal" for a label not read yet). The PC carries them
+  out and applies Claude's answers straight away; on the PC, the **📱** button in the top bar
+  opens "From your phone": every step with what became of it, and Skip, Retry and Undo.
+- **"Morrowkeep is on."** When Morrowkeep starts on the PC it tells your phone (through the
+  notification service, so it arrives even with Tailscale off). If the phone has changes waiting
+  it sends them right away and says so; otherwise you don't see anything (an iPhone shows a short
+  "Morrowkeep is on").
+
+Online, nothing changes: things are sent at once, and Claude and label photos still show you what
+they found before anything is saved. Keep the phone app's address the same (the same PC and
+tailnet name): the copy and the waiting changes belong to that address.
 
 ### Reminders on the phone
 

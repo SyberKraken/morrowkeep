@@ -2,7 +2,7 @@
 // PC asleep, Morrowkeep closed). Cache first: the saved files are used straight away and refreshed
 // in the background; a new version (new CACHE name) installs as a whole set and is used from the
 // next open. API requests always go to the network.
-const CACHE = "morrowkeep-shell-v13";
+const CACHE = "morrowkeep-shell-v14";
 const SHELL = ["/", "/core.js", "/core.wasm", "/app.js", "/replica.js", "/outbox.js", "/plan.js", "/foods.js", "/train.js", "/progress.js", "/journal.js", "/manifest.webmanifest", "/icon.png"];
 
 self.addEventListener("install", (e) => {
@@ -34,9 +34,76 @@ self.addEventListener("fetch", (e) => {
 
 // ---------------------------------------------------------------- notifications from the PC
 
+// ---- "Morrowkeep is on": send what's waiting on the phone, straight from here
+
+function idb() {
+  return new Promise((ok, fail) => {
+    const rq = indexedDB.open("morrowkeep", 1);
+    rq.onupgradeneeded = () => { rq.result.createObjectStore("kv"); rq.result.createObjectStore("blobs"); };
+    rq.onsuccess = () => ok(rq.result);
+    rq.onerror = () => fail(rq.error);
+  });
+}
+function idbDo(db, store, mode, fn) {
+  return new Promise((ok, fail) => {
+    const t = db.transaction(store, mode);
+    const rq = fn(t.objectStore(store));
+    t.oncomplete = () => ok(rq && rq.result);
+    t.onerror = () => fail(t.error);
+  });
+}
+
+/// Sends the waiting steps (photos and recordings first); returns how many went.
+async function sendWaiting() {
+  const db = await idb();
+  const steps = (await idbDo(db, "kv", "readonly", (s) => s.get("outbox"))) || [];
+  const waiting = steps.filter((x) => x.state === "waiting");
+  if (!waiting.length) return 0;
+  const token = await caches.open("mk-auth").then((c) => c.match("/__token")).then((r) => (r ? r.text() : ""));
+  const auth = { Authorization: "Bearer " + token };
+  for (const x of waiting.filter((x) => x.blob && !x.blobSent)) {
+    const b = await idbDo(db, "blobs", "readonly", (s) => s.get(x.id));
+    if (b) {
+      const r = await fetch("/api/sync/blob?id=" + encodeURIComponent(x.id), { method: "POST", headers: Object.assign({ "Content-Type": b.type || "application/octet-stream" }, auth), body: b });
+      if (!r.ok) throw new Error("upload");
+    }
+    x.blobSent = true;
+  }
+  const r = await fetch("/api/sync/push", { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, auth),
+    body: JSON.stringify({ steps: waiting.map(({ id, seq, at, date, time, step }) => ({ id, seq, at, date, time, step })) }) });
+  if (!r.ok) throw new Error("push");
+  const res = await r.json();
+  for (const x of waiting) if (res.accepted.includes(x.id)) x.state = "sent";
+  await idbDo(db, "kv", "readwrite", (s) => s.put(steps, "outbox"));
+  return waiting.length;
+}
+
+async function pcIsOn() {
+  let waiting = 0;
+  try {
+    const db = await idb();
+    const steps = (await idbDo(db, "kv", "readonly", (s) => s.get("outbox"))) || [];
+    waiting = steps.filter((x) => x.state === "waiting").length;
+  } catch (_) {}
+  const show = (body) => self.registration.showNotification("Morrowkeep is on", { body, icon: "/icon.png", badge: "/icon.png", tag: "pc-on", data: { go: "outbox" } });
+  if (!waiting) {
+    // nothing to send: stay quiet (iPhones need every push to show something)
+    if (/iPhone|iPad/.test(self.navigator.userAgent)) await show("Nothing waiting on the phone.");
+    return;
+  }
+  await show(`Sending ${waiting} change${waiting === 1 ? "" : "s"} you made on the phone…`);
+  try {
+    const n = await sendWaiting();
+    await show(`${n} change${n === 1 ? "" : "s"} sent to your PC. Tap to see what it did with them.`);
+  } catch (_) {
+    await show(`${waiting} change${waiting === 1 ? "" : "s"} waiting. Tap to send (is Tailscale on?).`);
+  }
+}
+
 self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data ? e.data.text() : "" }; }
+  if (d.type === "pc_on") return e.waitUntil(pcIsOn());
   const opts = {
     body: d.body || "",
     icon: "/icon.png",

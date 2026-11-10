@@ -64,6 +64,36 @@ struct QueueFile {
     version: u32,
     #[serde(default)]
     steps: Vec<Queued>,
+    /// When phones were last told "Morrowkeep is on".
+    #[serde(default)]
+    pc_on_sent: Option<DateTime<Local>>,
+}
+
+/// Tells phones the PC is on (once Tailscale has had a moment), at most every 6 hours. The phone
+/// only shows it if it has steps waiting, and then sends them right away (sw.js).
+pub fn announce_pc_on(shared: Arc<Mutex<Data>>) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        let (paths, on) = {
+            let d = shared.lock().unwrap();
+            (d.paths.clone(), d.settings.phone_enabled && crate::phone::has_push(&d))
+        };
+        if !on {
+            return;
+        }
+        let due = with_queue(&paths, |q| {
+            let due = q.pc_on_sent.is_none_or(|t| Local::now() - t > chrono::Duration::hours(6));
+            if due {
+                q.pc_on_sent = Some(Local::now());
+                save(&paths, q);
+            }
+            due
+        });
+        if due {
+            let payload = serde_json::json!({"type": "pc_on", "title": "Morrowkeep is on", "body": "Tap to send what you did on the phone", "tag": "pc-on", "go": "outbox"});
+            crate::phone::push_all(&shared, &payload);
+        }
+    });
 }
 
 /// Finished steps kept for the panel and the phone's results.
