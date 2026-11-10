@@ -115,6 +115,7 @@ impl Backup {
             "daily" => String::new(),
             "before-restore" => " · before a restore".into(),
             "manual" => " · backed up by hand".into(),
+            "phone-step" => " · before a change from the phone".into(),
             w => format!(" · {}", w.replace('-', " ")),
         };
         format!("{when}{why} · {}", self.summary)

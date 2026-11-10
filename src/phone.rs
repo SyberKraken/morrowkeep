@@ -792,7 +792,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
             std::thread::spawn(move || {
                 let outcome = crate::claude::ask(&cli, &model, &prompt, &dir).map(|text| {
                     let mut d = shared.lock().unwrap();
-                    let mut e = crate::journal::JournalEntry::new(text.trim());
+                    let mut e = crate::journal::JournalEntry::new(crate::journal::reflection_text(&text));
                     e.kind = "reflection".into();
                     d.journal.push(e);
                     d.save_journal();

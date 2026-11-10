@@ -781,7 +781,15 @@ impl SettingsPage {
         if bk.list.is_none() {
             bk.list = Some(read(&paths));
         }
-        note(ui, "Morrowkeep copies each of your data files once a day and keeps two weeks of them. Restoring puts one part back the way it was in a backup; your current version is saved first, so a restore can be undone (pick the \"before a restore\" copy).");
+        ui.scope(|ui| {
+            // the page may be wider than the window: keep the text to the cards' width
+            ui.set_max_width(ui.available_width().min(760.0));
+            ui.add(egui::Label::new(
+                RichText::new("Morrowkeep copies each of your data files once a day and keeps two weeks of them. Restoring puts one part back the way it was in a backup; your current version is saved first, so a restore can be undone (pick the \"before a restore\" copy).")
+                    .weak()
+                    .size(12.5),
+            ).wrap());
+        });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button("Back up everything now").on_hover_text("Saves a copy of every part right now, e.g. before a big clean-up").clicked() {
@@ -802,25 +810,29 @@ impl SettingsPage {
         let Some(list) = bk.list.clone() else { return };
         let mut restore: Option<(String, std::path::PathBuf, String)> = None;
         ui.add_space(6.0);
-        egui::Grid::new("backups").num_columns(4).spacing([12.0, 10.0]).show(ui, |ui| {
-            for (part, now, backups) in &list {
-                let label = backup::PARTS.iter().find(|(p, _)| p == part).map_or(part.as_str(), |(_, l)| *l);
-                ui.vertical(|ui| {
+        // one card per part: name and what it holds now, then the backup to pick and Restore
+        for (part, now, backups) in &list {
+            let label = backup::PARTS.iter().find(|(p, _)| p == part).map_or(part.as_str(), |(_, l)| *l);
+            super::theme::card().show(ui, |ui| {
+                ui.set_width(ui.available_width().min(760.0));
+                ui.horizontal(|ui| {
                     ui.label(RichText::new(label).strong());
                     ui.label(RichText::new(format!("now: {now}")).weak().size(12.5));
                 });
                 if backups.is_empty() {
-                    ui.label(RichText::new("no backups yet").weak());
-                    ui.label("");
-                    ui.label("");
-                    ui.end_row();
-                    continue;
+                    ui.label(RichText::new("No backups yet.").weak());
+                    return;
                 }
                 let i = bk.pick.get(part).copied().unwrap_or(0).min(backups.len() - 1);
                 let mut pick = i;
-                egui::ComboBox::from_id_salt(("backup", part.as_str())).width(330.0).selected_text(backups[i].label()).show_ui(ui, |ui| {
-                    for (k, b) in backups.iter().enumerate() {
-                        ui.selectable_value(&mut pick, k, b.label());
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt(("backup", part.as_str())).width((ui.available_width() - 120.0).clamp(240.0, 480.0)).selected_text(backups[i].label()).show_ui(ui, |ui| {
+                        for (k, b) in backups.iter().enumerate() {
+                            ui.selectable_value(&mut pick, k, b.label());
+                        }
+                    });
+                    if bk.confirm.as_deref() != Some(part.as_str()) && ui.button("Restore…").clicked() {
+                        bk.confirm = Some(part.clone());
                     }
                 });
                 if pick != i {
@@ -828,27 +840,24 @@ impl SettingsPage {
                     bk.confirm = None;
                 }
                 if bk.confirm.as_deref() == Some(part.as_str()) {
-                    if ui.button(RichText::new("Yes, restore").color(super::theme::th().status.warning)).clicked() {
-                        restore = Some((part.clone(), backups[pick].path.clone(), backups[pick].label()));
-                    }
-                    if ui.button("No").clicked() {
-                        bk.confirm = None;
-                    }
-                } else {
-                    if ui.button("Restore…").clicked() {
-                        bk.confirm = Some(part.clone());
-                    }
-                    ui.label("");
-                }
-                ui.end_row();
-                if bk.confirm.as_deref() == Some(part.as_str()) {
-                    ui.label("");
                     let extra = if part == "items" { " Tasks synced with Google Calendar are synced again afterwards." } else { "" };
-                    ui.label(RichText::new(format!("Replace your current {} ({now}) with this backup? Your current version is saved first.{extra}", label.to_lowercase())).color(super::theme::th().status.warning).size(12.5));
-                    ui.end_row();
+                    ui.add(egui::Label::new(
+                        RichText::new(format!("Replace your current {} ({now}) with this backup? Your current version is saved first.{extra}", label.to_lowercase()))
+                            .color(super::theme::th().status.warning)
+                            .size(12.5),
+                    ).wrap());
+                    ui.horizontal(|ui| {
+                        if ui.button(RichText::new("Yes, restore").color(super::theme::th().status.warning)).clicked() {
+                            restore = Some((part.clone(), backups[pick].path.clone(), backups[pick].label()));
+                        }
+                        if ui.button("No").clicked() {
+                            bk.confirm = None;
+                        }
+                    });
                 }
-            }
-        });
+            });
+            ui.add_space(6.0);
+        }
         if let Some((part, path, what)) = restore {
             bk.confirm = None;
             match backup::restore(&paths, &part, &path) {

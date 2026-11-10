@@ -164,6 +164,22 @@ pub const PROMPTS: &[&str] = &[
 ];
 
 /// Days in a row with at least one entry, ending today (or yesterday, if today has none yet).
+/// The reflection text from Claude's reply. Claude Code is told to answer in Morrowkeep's import
+/// JSON, so it sometimes wraps the reflection as {"message": "..."}; that's unwrapped here.
+pub fn reflection_text(reply: &str) -> String {
+    let t = reply.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+    if t.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+            for k in ["message", "reflection", "text"] {
+                if let Some(s) = v.get(k).and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty()) {
+                    return s.trim().to_string();
+                }
+            }
+        }
+    }
+    reply.trim().to_string()
+}
+
 /// The "Reflect on my week" request: the last 7 days of notes, or None if there are none.
 pub fn reflection_prompt(entries: &[JournalEntry], today: NaiveDate) -> Option<String> {
     let week: Vec<&JournalEntry> = entries.iter().filter(|e| e.kind == "note" && e.date > today - chrono::Duration::days(7)).collect();
@@ -311,5 +327,16 @@ mod tests {
         // stored times are HH:MM
         let json = serde_json::to_string(&JournalEntry::new("t")).unwrap();
         assert!(json.contains("\"time\":\"") && !json.contains("\"kind\""));
+    }
+
+    #[test]
+    fn reflections_are_plain_text() {
+        assert_eq!(reflection_text("  You had a good week.  "), "You had a good week.");
+        assert_eq!(reflection_text(r#"{"message":"You had a busy day."}"#), "You had a busy day.");
+        assert_eq!(reflection_text("```json
+{\"reflection\": \"Walks helped.\"}
+```"), "Walks helped.");
+        // braces in ordinary text stay as they are
+        assert_eq!(reflection_text("{not json} but fine"), "{not json} but fine");
     }
 }

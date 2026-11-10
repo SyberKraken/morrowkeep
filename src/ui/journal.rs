@@ -161,7 +161,7 @@ impl JournalUi {
         if let Some(rx) = &self.reflecting {
             match rx.try_recv() {
                 Ok(Ok(text)) => {
-                    let mut e = JournalEntry::new(text.trim());
+                    let mut e = JournalEntry::new(crate::journal::reflection_text(&text));
                     e.kind = "reflection".into();
                     data.journal.push(e);
                     data.save_journal();

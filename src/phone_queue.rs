@@ -362,7 +362,7 @@ fn run(shared: &Arc<Mutex<Data>>, ui: &UiHandle, item: &Queued) -> (Status, Stri
             match crate::claude::ask(&cli, &model, &prompt, &dir) {
                 Ok(text) => {
                     let undo = backup_parts(&paths, &["journal"]);
-                    let mut e = crate::journal::JournalEntry::new(text.trim());
+                    let mut e = crate::journal::JournalEntry::new(crate::journal::reflection_text(&text));
                     e.kind = "reflection".into();
                     e.date = *week_end;
                     e.time = item.time;
