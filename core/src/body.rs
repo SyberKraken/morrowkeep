@@ -97,6 +97,11 @@ pub struct Body {
     pub goal: Option<Goal>,
     /// Earlier goals, oldest first.
     pub past_goals: Vec<Goal>,
+    /// Dev mode (Settings > General): your own lowest daily calories, anything from 0 up. When
+    /// set, the plan and the pace slider may go down to it (0 = the slider starts at eating
+    /// nothing), and the usual pace caps (1000 kcal a day, 1% of body weight a week) don't apply.
+    /// None = the usual rules (at least 1500, or 1200 for women).
+    pub low_calorie_min: Option<u32>,
 }
 
 impl Default for Body {
@@ -111,6 +116,7 @@ impl Default for Body {
             fallback_daily_limit: 0,
             goal: None,
             past_goals: Vec::new(),
+            low_calorie_min: None,
         }
     }
 }
@@ -243,6 +249,10 @@ impl Body {
     /// SAFE_WEEKLY_SHARE of body weight a week, and what keeps you above the calorie floor.
     /// Never below 100, so a date can always be worked out.
     pub fn max_deficit(&self, n: &Numbers) -> f32 {
+        // your own minimum: as far down as that, without the usual pace caps
+        if self.low_calorie_min.is_some() {
+            return (n.tdee - self.calorie_floor() as f32).max(100.0);
+        }
         let by_share = n.weight_kg * SAFE_WEEKLY_SHARE * KCAL_PER_KG / 7.0;
         let by_floor = n.tdee - self.calorie_floor() as f32;
         MAX_DEFICIT_KCAL.min(by_share).min(by_floor).max(100.0)
@@ -261,7 +271,18 @@ impl Body {
         Some(DateOptions { asap: date_for(fast), asap_deficit: fast, easy: date_for(easy), easy_deficit: easy, kg_left })
     }
 
+    /// The usual lowest daily calories (1500, or 1200 for women).
+    pub fn usual_floor(&self) -> u32 {
+        match self.sex {
+            Some(Sex::Female) => 1200,
+            _ => 1500,
+        }
+    }
+
     fn calorie_floor(&self) -> u32 {
+        if let Some(m) = self.low_calorie_min {
+            return m;
+        }
         match self.sex {
             Some(Sex::Female) => 1200,
             _ => 1500,
@@ -504,6 +525,16 @@ mod tests {
         let p = b.plan(&n, today);
         assert_eq!(p.mode, Mode::Maintain);
         assert_eq!(p.daily, ((1805.0f32 * 1.2) / 10.0).round() as u32 * 10);
+        // your own lower minimum: down to it, without the usual pace caps
+        let mut low = b.clone();
+        low.low_calorie_min = Some(1200);
+        assert_eq!(low.max_deficit(&n).round(), (n.tdee - 1200.0).round());
+        let lp = low.plan(&n, today);
+        assert!(lp.daily >= 1200 && lp.floor == 1200);
+        // dev mode from 0: the fastest pace is eating nothing
+        low.low_calorie_min = Some(0);
+        assert_eq!(low.plan(&n, today).floor, 0);
+        assert_eq!(low.max_deficit(&n).round(), n.tdee.round());
     }
 
     #[test]

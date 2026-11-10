@@ -358,6 +358,31 @@ impl SettingsPage {
 
         subheading(ui, "Calories");
         note(ui, "The daily calorie limit is on the Body tab: worked out from your profile and goal weight, or a fallback limit you set there.");
+        ui.add_space(6.0);
+        // saved in body.json at once (not part of Save / Revert), so the phone follows it too
+        let usual = data.body.usual_floor();
+        let mut on = data.body.low_calorie_min.is_some();
+        if ui
+            .checkbox(&mut on, format!("Dev mode: allow any daily calories (below {usual}, down to 0)"))
+            .on_hover_text("The Body plan and its pace slider may go as low as the minimum below, without the usual limits on how fast you lose")
+            .changed()
+        {
+            data.body.low_calorie_min = on.then_some(0);
+            data.save_body();
+        }
+        if let Some(mut min) = data.body.low_calorie_min {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Lowest daily calories");
+                changed = ui.add(egui::DragValue::new(&mut min).range(0..=usual.saturating_sub(1)).speed(10).suffix(" kcal")).changed();
+                ui.label(RichText::new("0 = the slider starts at eating nothing").weak().size(12.5));
+            });
+            if changed {
+                data.body.low_calorie_min = Some(min);
+                data.save_body();
+            }
+            ui.label(RichText::new(format!("The usual rules (at least {usual} kcal, at most about 1% of your weight a week) are off.")).color(super::theme::th().status.warning).size(12.5));
+        }
     }
 
     fn appearance(&mut self, ui: &mut Ui, data: &mut Data) {

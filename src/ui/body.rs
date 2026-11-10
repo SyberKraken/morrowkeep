@@ -275,7 +275,7 @@ fn goal_card(ui: &mut Ui, data: &mut Data, st: &mut BodyUi, today: NaiveDate) {
         if let (Some(kg), Some((n, _))) = (kg_draft, data.body_plan(today)) {
             if let Some(o) = data.body.date_options(&n, kg, today) {
                 let saved = data.body.goal.as_ref().filter(|g| g.reached_on.is_none()).map(|g| (g.target_kg, g.target_date));
-                pace_picker(ui, st, &o, &n, today, saved);
+                pace_picker(ui, st, &o, &n, today, saved, data.body.low_calorie_min);
                 ui.add_space(8.0);
             }
         }
@@ -363,7 +363,7 @@ fn goal_card(ui: &mut Ui, data: &mut Data, st: &mut BodyUi, today: NaiveDate) {
 }
 
 /// ASAP and Easy dates with a slider between them; moving it fills in the date field.
-fn pace_picker(ui: &mut Ui, st: &mut BodyUi, o: &body::DateOptions, n: &body::Numbers, today: NaiveDate, saved: Option<(f32, NaiveDate)>) {
+fn pace_picker(ui: &mut Ui, st: &mut BodyUi, o: &body::DateOptions, n: &body::Numbers, today: NaiveDate, saved: Option<(f32, NaiveDate)>, dev_min: Option<u32>) {
     let t = super::theme::th();
     let (lo, hi) = ((o.asap - today).num_days(), (o.easy - today).num_days());
     let draft = crate::parse::parse_date(&st.target_date, today).filter(|d| *d > today);
@@ -380,7 +380,11 @@ fn pace_picker(ui: &mut Ui, st: &mut BodyUi, o: &body::DateOptions, n: &body::Nu
             .on_hover_text(format!("{tip}\n{}/day deficit · −{:.2} kg a week", kcal(deficit), deficit * 7.0 / body::KCAL_PER_KG))
             .clicked()
         };
-        if end(ui, "ASAP", o.asap, o.asap_deficit, "The largest recommended deficit for you") {
+        let asap_tip = match dev_min {
+            Some(m) => format!("Dev mode: as fast as eating {m} kcal a day allows"),
+            None => "The largest recommended deficit for you".to_string(),
+        };
+        if end(ui, "ASAP", o.asap, o.asap_deficit, &asap_tip) {
             set(st, lo);
         }
         ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(160.0, 520.0);
