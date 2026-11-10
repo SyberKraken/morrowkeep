@@ -217,10 +217,24 @@ notifications, so typing a value is one tap away in the app.
 
 ## Build and run
 
+Once, add the WebAssembly target (the phone app runs Morrowkeep's rules as WebAssembly):
+
+```
+rustup target add wasm32-unknown-unknown
+```
+
+Then:
+
 ```
 cargo build --release
 target\release\morrowkeep.exe
 ```
+
+The rules shared by the desktop and the phone live in `core/` (`morrowkeep-core`): the parser,
+tasks and repeats, foods, body numbers, the journal, workouts, and the *steps* every change is
+made of. `build.rs` compiles that crate to `core.wasm` for the phone. `cargo test --workspace`
+runs all tests; `node core/wasm_test.js` runs the phone's offline scenario against the
+WebAssembly build (after `cargo build -p morrowkeep-core --target wasm32-unknown-unknown --release`).
 
 Building without voice support doesn't need CMake:
 
