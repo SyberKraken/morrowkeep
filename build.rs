@@ -7,8 +7,9 @@ fn main() {
     println!("cargo:rerun-if-changed=core/src");
     println!("cargo:rerun-if-changed=core/Cargo.toml");
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    // its own target folder, so it doesn't wait on the outer build's lock
-    let target_dir = out.join("wasm-build");
+    // its own target folder (so it doesn't wait on the outer build's lock), kept short: build
+    // paths under OUT_DIR can pass Windows' 260-character limit
+    let target_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("target").join("wasm-core");
     let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     cmd.args(["build", "-p", "morrowkeep-core", "--target", "wasm32-unknown-unknown", "--release", "--target-dir"]).arg(&target_dir);
     for var in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET", "CARGO_MAKEFLAGS"] {

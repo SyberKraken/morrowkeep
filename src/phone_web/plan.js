@@ -7,7 +7,7 @@ S.plan = { data: null, open: null, edit: null, confirmDelete: false, loading: fa
 async function planLoad() {
   S.plan.loading = true;
   try {
-    S.plan.data = await api("/api/agenda?days=14");
+    S.plan.data = await screenData("agenda", { days: 14 }, "/api/agenda?days=14");
   } catch (e) {
     if (e.server) toast(e.message, 4000);
   }

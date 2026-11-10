@@ -14,9 +14,15 @@ function jrQuery(before) {
   return "/api/journal?" + p;
 }
 
+/// The same query for the phone's copy.
+function jrArgs(before) {
+  const J = S.jr;
+  return { q: J.q.trim(), pinned: J.pinned, voice: J.voice, ...(before ? { before } : {}) };
+}
+
 async function jrLoad() {
   try {
-    S.jr.data = await api(jrQuery());
+    S.jr.data = await screenData("journal", jrArgs(), jrQuery());
   } catch (e) {
     if (e.server) toast(e.message, 4000);
   }
@@ -134,7 +140,7 @@ Object.assign(ACTIONS, {
   async jrmore() {
     const d = S.jr.data, last = d.days[d.days.length - 1].date;
     try {
-      const r = await api(jrQuery(last));
+      const r = await screenData("journal", jrArgs(last), jrQuery(last));
       d.days.push(...r.days);
       d.more = r.more;
     } catch (e) {

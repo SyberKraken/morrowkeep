@@ -7,7 +7,7 @@ S.lib = { data: null, q: "", filter: "all", edit: null, confirmDelete: false, ad
 
 async function libLoad() {
   try {
-    S.lib.data = await api("/api/foods");
+    S.lib.data = await screenData("foods", {}, "/api/foods");
   } catch (e) {
     if (e.server) toast(e.message, 4000);
   }

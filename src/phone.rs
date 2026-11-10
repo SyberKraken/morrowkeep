@@ -7,6 +7,7 @@
 //! through the same data and code as the desktop app, so changes show up on both at once.
 
 use morrowkeep_core::steps::Step;
+use morrowkeep_core::views;
 use crate::store::Data;
 use crate::worker::UiHandle;
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime};
@@ -30,7 +31,7 @@ const ICON: &[u8] = include_bytes!("../assets/morrowkeep.png");
 /// The phone app's screens, one file each (they share app.js's helpers).
 /// Morrowkeep's rules (morrowkeep-core) as WebAssembly, built by build.rs.
 const CORE_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/core.wasm"));
-const SCRIPTS: &[(&str, &str)] = &[("/core.js", include_str!("phone_web/core.js")), ("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js")), ("/journal.js", include_str!("phone_web/journal.js"))];
+const SCRIPTS: &[(&str, &str)] = &[("/core.js", include_str!("phone_web/core.js")), ("/replica.js", include_str!("phone_web/replica.js")), ("/plan.js", include_str!("phone_web/plan.js")), ("/foods.js", include_str!("phone_web/foods.js")), ("/train.js", include_str!("phone_web/train.js")), ("/progress.js", include_str!("phone_web/progress.js")), ("/journal.js", include_str!("phone_web/journal.js"))];
 
 /// How long a pairing code works.
 const PAIR_SECS: u64 = 600;
@@ -354,7 +355,8 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
         (Method::Get, "/api/state") => {
             // an earlier day picked on the phone's Today screen
             let day = day_of(v, q)?;
-            Ok(state(&shared.lock().unwrap(), device, day))
+            let d = shared.lock().unwrap();
+            Ok(views::state(&d.snapshot(None), &pc_info(&d, device), day, today))
         }
 
         // ---- notifications
@@ -524,27 +526,9 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
 
         // the Plan tab: overdue and undated tasks, then the next `days` days
         (Method::Get, "/api/agenda") => {
-            let days = q.get("days").and_then(|n| n.parse::<i64>().ok()).unwrap_or(14).clamp(1, 60);
+            let days = q.get("days").and_then(|n| n.parse::<i64>().ok()).unwrap_or(14);
             let d = shared.lock().unwrap();
-            let end = today + Duration::days(days - 1);
-            let mut overdue: Vec<&crate::model::Item> = d.items.iter().filter(|it| it.repeat.is_none() && !it.done && it.date.is_some_and(|x| x < today)).collect();
-            overdue.sort_by_key(|it| it.date);
-            let backlog: Vec<Value> = d.items.iter().filter(|it| it.date.is_none() && !it.done).map(|it| item_json(it, today)).collect();
-            let occ = crate::model::occurrences(&d.items, today, end);
-            let mut list: Vec<Value> = Vec::new();
-            let mut day = today;
-            while day <= end {
-                let mut its: Vec<&crate::model::Item> = occ.iter().filter(|(x, _)| *x == day).map(|(_, i)| &d.items[*i]).collect();
-                its.sort_by_key(|it| (it.time.is_none(), it.time));
-                let label = match (day - today).num_days() {
-                    0 => "Today".to_string(),
-                    1 => "Tomorrow".to_string(),
-                    _ => day.format("%A %-d %b").to_string(),
-                };
-                list.push(json!({"date": day.to_string(), "label": label, "items": its.iter().map(|it| item_json(it, day)).collect::<Vec<_>>()}));
-                day += Duration::days(1);
-            }
-            Ok(json!({"overdue": overdue.iter().map(|it| item_json(it, it.date.unwrap_or(today))).collect::<Vec<_>>(), "backlog": backlog, "days": list}))
+            Ok(views::agenda(&d.snapshot(None), &pc_info(&d, device), today, days))
         }
 
         // edit a task from the phone: title, date (null = backlog), time (null = anytime), category, notes
@@ -584,23 +568,7 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
 
         // the food library: every ingredient and meal, with meals' computed numbers
         (Method::Get, "/api/foods") => {
-            let d = shared.lock().unwrap();
-            let lib = &d.foods;
-            let meals: Vec<Value> = lib
-                .meals
-                .iter()
-                .map(|m| {
-                    let p = lib.meal_portionable(m);
-                    let (_, total_g) = lib.meal_totals(m);
-                    let mut v = serde_json::to_value(m).unwrap_or(Value::Null);
-                    v["kcal_serving"] = json!(p.kcal(crate::foods::Amount::Servings(1.0)));
-                    v["serving_g"] = json!(p.serving_g.round());
-                    v["kcal_100g"] = json!(p.per100.kcal.round());
-                    v["total_g"] = json!(total_g.round());
-                    v
-                })
-                .collect();
-            Ok(json!({"foods": lib.foods, "meals": meals}))
+            Ok(views::foods(&shared.lock().unwrap().snapshot(None)))
         }
 
         // add or change an ingredient ("food") or a meal; no id = new
@@ -663,72 +631,13 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
 
         // Train tab: workouts and recent sessions
         (Method::Get, "/api/workouts") => {
-            let d = shared.lock().unwrap();
-            let lib = &d.exercises.exercises;
-            let workouts: Vec<Value> = d
-                .workouts
-                .workouts
-                .iter()
-                .filter(|w| !w.items.is_empty())
-                .map(|w| {
-                    json!({"id": w.id, "name": w.name, "notes": w.notes, "seconds": w.seconds(lib), "exercises": w.exercise_count(),
-                           "equipment": w.equipment(lib).iter().map(|q| crate::workouts::equipment_label(q).to_lowercase()).collect::<Vec<_>>(),
-                           "task": w.task.as_deref().and_then(|id| d.items.iter().find(|i| i.id == id)).map(|i| i.title.clone())})
-                })
-                .collect();
-            let mut sessions: Vec<&crate::workouts::Session> = d.workout_log.sessions.iter().collect();
-            sessions.sort_by(|a, b| (b.date, &b.start).cmp(&(a.date, &a.start)));
-            let history: Vec<Value> = sessions
-                .iter()
-                .take(30)
-                .map(|s| {
-                    let volume: f32 = s.sets.iter().map(|x| x.reps.unwrap_or(0) as f32 * x.kg.unwrap_or(0.0)).sum();
-                    json!({"id": s.id, "date": s.date.to_string(), "start": s.start, "duration_s": s.duration_s, "workout": s.workout,
-                           "sets": s.sets, "completed": s.completed, "volume": volume.round()})
-                })
-                .collect();
-            Ok(json!({"workouts": workouts, "history": history}))
+            Ok(views::workouts(&shared.lock().unwrap().snapshot(None)))
         }
 
         // one workout, ready to play: its steps and how to do each exercise
         (Method::Get, "/api/workout") => {
             let id = q.get("id").ok_or_else(|| bad("Missing workout"))?;
-            let d = shared.lock().unwrap();
-            let lib = &d.exercises.exercises;
-            let w = d.workouts.workouts.iter().find(|w| w.id == *id).ok_or_else(|| bad("That workout isn't there any more"))?;
-            let steps: Vec<Value> = w
-                .steps(lib)
-                .into_iter()
-                .map(|s| match s {
-                    crate::workouts::Step::Set { exercise, name, set, sets, reps, seconds, kg, per_side } => {
-                        json!({"type": "set", "exercise": exercise, "name": name, "set": set, "sets": sets, "reps": reps, "seconds": seconds, "kg": kg, "per_side": per_side})
-                    }
-                    crate::workouts::Step::Rest { seconds, label } => json!({"type": "rest", "seconds": seconds, "label": label}),
-                })
-                .collect();
-            let mut exercises = serde_json::Map::new();
-            for item in &w.items {
-                if let crate::workouts::Item::Exercise { exercise, .. } = item {
-                    if let Some(e) = lib.iter().find(|e| e.id == *exercise) {
-                        exercises.insert(e.id.clone(), json!({"name": e.name, "steps": e.steps, "form": e.form, "mistakes": e.mistakes, "easier": e.easier,
-                            "harder": e.harder, "muscles_main": e.muscles_main, "muscles_helping": e.muscles_helping,
-                            "equipment": e.equipment.iter().map(|q| crate::workouts::equipment_label(q)).collect::<Vec<_>>()}));
-                    }
-                }
-            }
-            let items: Vec<Value> = w
-                .items
-                .iter()
-                .map(|it| match it {
-                    crate::workouts::Item::Exercise { exercise, sets, reps, seconds, kg, rest_s } => {
-                        let e = lib.iter().find(|e| e.id == *exercise);
-                        json!({"type": "exercise", "exercise": exercise, "name": e.map_or(exercise.as_str(), |e| e.name.as_str()), "sets": sets, "reps": reps,
-                               "seconds": seconds, "kg": kg, "rest_s": rest_s, "per_side": e.is_some_and(|e| e.kind == "reps_per_side")})
-                    }
-                    crate::workouts::Item::Break { seconds, label } => json!({"type": "break", "seconds": seconds, "label": label}),
-                })
-                .collect();
-            Ok(json!({"id": w.id, "name": w.name, "notes": w.notes, "task": w.task, "seconds": w.seconds(lib), "items": items, "steps": steps, "exercises": exercises}))
+            views::workout(&shared.lock().unwrap().snapshot(None), id).map_err(bad)
         }
 
         // a workout done on the phone
@@ -760,99 +669,32 @@ fn api(method: &Method, path: &str, q: &HashMap<String, String>, v: &Value, body
 
         // Progress: calories and weight over time, the Body numbers and habit streaks
         (Method::Get, "/api/progress") => {
-            let days = q.get("days").and_then(|n| n.parse::<i64>().ok()).unwrap_or(30).clamp(7, 365);
+            let days = q.get("days").and_then(|n| n.parse::<i64>().ok()).unwrap_or(30);
             let d = shared.lock().unwrap();
-            let from = today - Duration::days(days - 1);
-            let mut calories = Vec::new();
-            let mut day = from;
-            while day <= today {
-                calories.push(json!({"date": day.to_string(), "kcal": d.calories_on(day)}));
-                day += Duration::days(1);
-            }
-            let weights: Vec<Value> = d.weights.iter().filter(|w| w.date >= from).map(|w| json!({"date": w.date.to_string(), "kg": dec(w.kg, 1)})).collect();
-            let trend: Vec<Value> = crate::body::trend_series(&d.weights).into_iter().filter(|(x, _)| *x >= from).map(|(x, kg)| json!({"date": x.to_string(), "kg": dec(kg, 2)})).collect();
-            let goal = d.body.goal.as_ref().map(|g| {
-                json!({"target_kg": dec(g.target_kg, 1), "target_date": g.target_date.to_string(), "set_on": g.set_on.to_string(), "start_kg": dec(g.start_kg, 2),
-                       "reached_on": g.reached_on.map(|x| x.to_string()),
-                       "status": crate::body::progress(g, &d.weights, today).map(|p| if p.to_go <= 0.0 { format!("Goal {:.1} kg reached", g.target_kg) } else { format!("{:.1} kg to go · {}", p.to_go, p.status()) })})
-            });
-            let body = match d.body_plan(today) {
-                Some((n, p)) => json!({"complete": true, "weight_kg": dec(n.weight_kg, 1), "age": n.age, "bmr": n.bmr.round(), "formula": n.formula,
-                    "tdee": n.tdee.round(), "bmi": dec(n.bmi, 1), "healthy": [n.healthy_kg.0.round(), n.healthy_kg.1.round()],
-                    "daily": p.daily, "losing": p.mode == crate::body::Mode::Lose, "deficit": p.deficit.round(), "kg_per_week": dec(p.kg_per_week, 2),
-                    "days_left": p.days_left, "safe_date": p.safe_date.map(|x| x.to_string()), "too_fast": p.too_fast, "floored": p.floored}),
-                None => json!({"complete": false, "missing": d.body.missing(d.current_weight()), "daily": d.daily_limit()}),
-            };
-            let pace = crate::body::recent_pace(&d.weights).map(|k| dec(k * 7.0, 2));
-            // habit streaks: each repeating task's last 21 days (due / done)
-            let start = today - Duration::days(20);
-            let occ = crate::model::occurrences(&d.items, start, today);
-            let mut habits: Vec<Value> = Vec::new();
-            for (i, it) in d.items.iter().enumerate().filter(|(_, it)| it.repeat.is_some() && it.date.is_some_and(|x| x <= today)) {
-                let due: Vec<NaiveDate> = occ.iter().filter(|(_, k)| *k == i).map(|(x, _)| *x).collect();
-                if due.is_empty() {
-                    continue;
-                }
-                // current streak: done occurrences in a row, not broken by today if it's still open
-                let mut streak = 0;
-                for x in due.iter().rev() {
-                    if it.is_done_on(*x) {
-                        streak += 1;
-                    } else if *x == today {
-                        continue;
-                    } else {
-                        break;
-                    }
-                }
-                let cells: Vec<Value> = (0..21).map(|k| start + Duration::days(k)).map(|x| json!(if !due.contains(&x) { 0 } else if it.is_done_on(x) { 2 } else { 1 })).collect();
-                habits.push(json!({"title": it.title, "icon": crate::categories::icon(&it.kind), "color": hex(crate::ui::kind_color(&it.kind)),
-                                   "streak": streak, "done": due.iter().filter(|x| it.is_done_on(**x)).count(), "due": due.len(), "cells": cells}));
-            }
-            Ok(json!({"from": from.to_string(), "today": today.to_string(), "calories": calories, "limit": d.daily_limit(), "limit_from_plan": d.limit_from_plan(), "weights": weights, "trend": trend, "goal": goal,
-                      "body": body, "pace_kg_week": pace, "habits": habits, "journal_streak": crate::journal::streak(&d.journal, today)}))
+            Ok(views::progress(&d.snapshot(None), &pc_info(&d, device), today, days))
         }
 
         // the journal, a page of days at a time (newest first), or search results
         (Method::Get, "/api/journal") => {
             let d = shared.lock().unwrap();
-            let transcribing = TRANSCRIBING.lock().unwrap().clone().unwrap_or_default();
-            let ej = |e: &crate::journal::JournalEntry| entry_json(e, &transcribing);
-            let query = q.get("q").map(|s| s.trim().to_string()).unwrap_or_default();
+            let query = q.get("q").map(String::as_str).unwrap_or("");
             let (pinned, voice) = (q.get("pinned").is_some_and(|v| v == "1"), q.get("voice").is_some_and(|v| v == "1"));
-            let keep = |e: &&crate::journal::JournalEntry| (!pinned || e.pinned) && (!voice || e.audio.is_some()) && (query.is_empty() || e.matches(&query));
-            let mut list: Vec<&crate::journal::JournalEntry> = d.journal.iter().filter(keep).collect();
-            list.sort_by_key(|e| std::cmp::Reverse(crate::journal::sort_key(e)));
-            // browsing: 10 days with entries per page, before `before`
-            let filtered = pinned || voice || !query.is_empty();
-            let before = q.get("before").and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).unwrap_or(today + Duration::days(1));
-            let mut days: Vec<NaiveDate> = list.iter().map(|e| e.date).filter(|x| *x < before).collect();
-            days.dedup();
-            let page = if filtered { 60 } else { 10 };
-            let more = days.len() > page;
-            days.truncate(page);
-            let out: Vec<Value> = days
-                .iter()
-                .map(|day| json!({"date": day.to_string(), "entries": list.iter().filter(|e| e.date == *day).map(|e| ej(e)).collect::<Vec<_>>()}))
-                .collect();
-            // most used tags, and what you wrote a month, 3 months and a year ago
-            let mut tags: HashMap<String, usize> = HashMap::new();
-            for e in &d.journal {
-                for t in e.tags() {
-                    *tags.entry(t).or_default() += 1;
-                }
-            }
-            let mut tags: Vec<(String, usize)> = tags.into_iter().collect();
-            tags.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let earlier: Vec<Value> = [(30, "A month ago"), (91, "3 months ago"), (365, "A year ago")]
-                .iter()
-                .filter_map(|(n, label)| {
-                    let day = today - Duration::days(*n);
-                    let es: Vec<Value> = d.journal.iter().filter(|e| e.date == day).map(|e| ej(e)).collect();
-                    (!es.is_empty()).then(|| json!({"label": label, "date": day.to_string(), "entries": es}))
-                })
-                .collect();
-            Ok(json!({"days": out, "more": more, "tags": tags.iter().take(8).map(|(t, _)| t).collect::<Vec<_>>(), "on_this_day": earlier,
-                      "total": d.journal.len(), "streak": crate::journal::streak(&d.journal, today)}))
+            let before = q.get("before").and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+            Ok(views::journal(&d.snapshot(None), &pc_info(&d, device), today, query, pinned, voice, before))
+        }
+
+        // everything the phone needs to work on its own: your data (calories, weights and workout
+        // sessions of the last 400 days) and what only the PC knows
+        (Method::Get, "/api/sync/snapshot") => {
+            let d = shared.lock().unwrap();
+            Ok(json!({"snapshot": d.snapshot(Some(today - Duration::days(400))), "pc": pc_info(&d, device), "taken_at": Local::now().to_rfc3339(),
+                      "version": data_version(&d)}))
+        }
+
+        // cheap check: has anything changed since the phone's copy?
+        (Method::Get, "/api/sync/version") => {
+            let d = shared.lock().unwrap();
+            Ok(json!({"version": data_version(&d)}))
         }
 
         (Method::Post, "/api/journal/update") => {
@@ -1159,129 +1001,49 @@ pub fn push_all(shared: &Arc<Mutex<Data>>, payload: &Value) -> usize {
     sent
 }
 
-/// A journal entry for the phone.
-fn entry_json(e: &crate::journal::JournalEntry, transcribing: &HashSet<String>) -> Value {
-    json!({"id": e.id, "date": e.date.to_string(), "time": e.time.map(|t| t.format("%H:%M").to_string()), "text": e.text,
-           "transcript": e.transcript, "mood": e.mood, "mood_label": e.mood.map(crate::journal::mood_label), "pinned": e.pinned,
-           "audio_secs": e.audio_secs, "transcribing": transcribing.contains(&e.id), "kind": e.kind, "words": e.words()})
-}
-
-/// A task for the phone, as it is on `day`.
-fn item_json(it: &crate::model::Item, day: NaiveDate) -> Value {
-    json!({"id": it.id, "title": it.title, "date": it.date.map(|x| x.to_string()), "day": day.to_string(), "time": it.time.map(|t| t.format("%H:%M").to_string()),
-           "duration": it.duration_min, "done": it.is_done_on(day), "kind": it.kind, "color": hex(crate::ui::kind_color(&it.kind)),
-           "icon": crate::categories::icon(&it.kind), "repeat": it.repeat, "notes": it.notes})
-}
-
-/// An f32 rounded to `places` decimals as f64, so JSON shows 81.8 and not 81.80000305175781.
-fn dec(x: f32, places: i32) -> f64 {
-    let k = 10f64.powi(places);
-    (x as f64 * k).round() / k
-}
-
-/// Everything the phone shows; calories, weight, tasks and the journal count are for `day`
-/// (today unless an earlier day was picked).
-fn state(d: &Data, device: &str, day: NaiveDate) -> Value {
-    let now = Local::now();
-    let today = now.date_naive();
-    let th = crate::ui::theme::th();
-    let theme = json!({
-        "dark": th.dark,
-        "page": hex(th.surface.page), "card": hex(th.surface.card), "border": hex(th.surface.card_border), "input": hex(th.surface.input),
-        "text": hex(th.text.primary), "muted": hex(th.text.muted), "on_color": hex(th.text.on_color),
-        "fill": hex(th.widget.fill), "selection": hex(th.widget.selection), "accent": hex(th.widget.selection_border),
-        "success": hex(th.status.success), "danger": hex(th.status.danger), "warning": hex(th.status.warning),
-        "brand": hex(th.data.brand), "calories": hex(crate::ui::calorie_color()), "weight": hex(crate::ui::weight_color()),
-        "journal": hex(th.data.journal), "goal": hex(th.data.goal), "claude": hex(th.data.claude),
-        "workout": hex(crate::ui::kind_color("workout")), "rest": hex(th.data.rest), "trend": hex(th.data.trend),
-    });
-
-    // tasks: scheduled first, then anytime (same order as the Habits board)
-    let mut occ: Vec<usize> = crate::model::occurrences(&d.items, day, day).into_iter().map(|(_, i)| i).collect();
-    occ.sort_by_key(|i| (d.items[*i].time.is_none(), d.items[*i].time));
-    let tasks: Vec<Value> = occ
-        .iter()
-        .map(|i| {
-            let it = &d.items[*i];
-            json!({"id": it.id, "title": it.title, "time": it.time.map(|t| t.format("%H:%M").to_string()), "done": it.is_done_on(day),
-                   "color": hex(crate::ui::kind_color(&it.kind)), "icon": crate::categories::icon(&it.kind), "repeat": it.repeat.is_some()})
-        })
-        .collect();
-
-    let entries: Vec<Value> = d
-        .calories
-        .iter()
-        .filter(|c| c.date == day)
-        .map(|c| json!({"id": c.id, "time": c.time.map(|t| t.format("%H:%M").to_string()), "kcal": c.kcal, "description": c.description}))
-        .collect();
-
-    let last = d.weight_before(day).map(|w| json!({"kg": dec(w.kg, 1), "date": w.date.format("%b %-d").to_string()}));
-    let goal = d.body.goal.as_ref().and_then(|g| {
-        let p = crate::body::progress(g, &d.weights, today)?;
-        (g.start_kg > g.target_kg).then(|| {
-            if p.to_go <= 0.0 {
-                format!("Goal {:.1} kg reached", g.target_kg)
-            } else {
-                format!("{:.1} kg to go to {:.1} kg · {}", p.to_go, g.target_kg, p.status())
-            }
-        })
-    });
-
-    let transcribing = TRANSCRIBING.lock().unwrap().clone().unwrap_or_default();
-    let mut recent: Vec<&crate::journal::JournalEntry> = d.journal.iter().filter(|e| e.date >= today - Duration::days(2)).collect();
-    recent.sort_by_key(|e| std::cmp::Reverse(crate::journal::sort_key(e)));
-    let journal: Vec<Value> = recent
-        .iter()
-        .map(|e| {
-            json!({"id": e.id, "date": e.date.to_string(), "time": e.time.map(|t| t.format("%H:%M").to_string()), "text": e.text,
-                   "transcript": e.transcript, "mood": e.mood, "mood_label": e.mood.map(crate::journal::mood_label),
-                   "audio_secs": e.audio_secs, "transcribing": transcribing.contains(&e.id), "kind": e.kind})
-        })
-        .collect();
-
-    let favorite = |id: &str| d.foods.food(id).map(|f| f.favorite).or_else(|| d.foods.meals.iter().find(|m| m.id == id).map(|m| m.favorite)).unwrap_or(false);
-    let foods: Vec<Value> = d
-        .foods
-        .all()
-        .iter()
-        .map(|p| {
-            json!({"id": p.id, "name": p.name, "meal": p.is_meal, "kcal_serving": p.kcal(crate::foods::Amount::Servings(1.0)),
-                   "serving_name": p.serving_name, "serving_g": p.serving_g, "kcal_100g": p.per100.kcal, "favorite": favorite(&p.id)})
-        })
-        .collect();
-    let mut recent_foods: Vec<String> = Vec::new();
-    let mut logged: Vec<&crate::model::CalorieEntry> = d.calories.iter().filter(|c| c.food.is_some()).collect();
-    logged.sort_by_key(|c| std::cmp::Reverse((c.date, c.time)));
-    for c in logged {
-        if let Some(p) = c.food.as_deref().and_then(|n| d.foods.find(n)) {
-            if !recent_foods.contains(&p.id) {
-                recent_foods.push(p.id);
-            }
-        }
-        if recent_foods.len() >= 6 {
-            break;
-        }
+/// Changes whenever a data file, the settings or theme, or the transcriptions in progress change:
+/// the phone fetches a new snapshot only then.
+fn data_version(d: &Data) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let p = &d.paths;
+    for f in [&p.items, &p.calories, &p.weight, &p.body, &p.journal, &p.foods, &p.exercises, &p.workouts, &p.workout_log, &p.settings] {
+        std::fs::metadata(f).and_then(|m| m.modified()).ok().hash(&mut h);
     }
-
-    json!({
-        "date": today.to_string(),
-        "date_label": now.format("%a %-d %b").to_string(),
-        "theme": theme,
-        "day": day.to_string(),
-        "day_label": day.format("%A %-d %b").to_string(),
-        "calories": {"total": d.calories_on(day), "limit": d.daily_limit(), "recommended": d.recommended_for(day), "entries": entries},
-        "weight": {"today": d.weight_on(day).map(|k| dec(k, 1)), "last": last, "goal": goal},
-        "journal": {"today": d.journal_on(day), "streak": crate::journal::streak(&d.journal, today),
-                    "prompt": crate::journal::PROMPTS[today.format("%j").to_string().parse::<usize>().unwrap_or(0) % crate::journal::PROMPTS.len()],
-                    "recent": journal},
-        "tasks": tasks,
-        "foods": foods,
-        "recent_foods": recent_foods,
-        "claude": crate::claude::find_cli(&d.settings).is_some(),
-        "categories": crate::categories::names().iter().map(|k| json!({"name": k, "icon": crate::categories::icon(k), "color": hex(crate::ui::kind_color(k))})).collect::<Vec<_>>(),
-        "notifications": d.settings.phone_devices.iter().any(|p| p.id == device && p.push.is_some()),
-    })
+    d.settings.theme.hash(&mut h);
+    crate::ui::theme::version().hash(&mut h);
+    let mut tr: Vec<String> = TRANSCRIBING.lock().unwrap().clone().unwrap_or_default().into_iter().collect();
+    tr.sort();
+    tr.hash(&mut h);
+    format!("{:016x}", h.finish())
 }
+
+/// What only the PC knows, for the shared views and the phone's copy.
+fn pc_info(d: &Data, device: &str) -> views::Pc {
+    let th = crate::ui::theme::th();
+    let style = |k: &str| views::KindStyle { name: k.to_string(), icon: crate::categories::icon(k), color: hex(crate::ui::kind_color(k)) };
+    views::Pc {
+        theme: json!({
+            "dark": th.dark,
+            "page": hex(th.surface.page), "card": hex(th.surface.card), "border": hex(th.surface.card_border), "input": hex(th.surface.input),
+            "text": hex(th.text.primary), "muted": hex(th.text.muted), "on_color": hex(th.text.on_color),
+            "fill": hex(th.widget.fill), "selection": hex(th.widget.selection), "accent": hex(th.widget.selection_border),
+            "success": hex(th.status.success), "danger": hex(th.status.danger), "warning": hex(th.status.warning),
+            "brand": hex(th.data.brand), "calories": hex(crate::ui::calorie_color()), "weight": hex(crate::ui::weight_color()),
+            "journal": hex(th.data.journal), "goal": hex(th.data.goal), "claude": hex(th.data.claude),
+            "workout": hex(crate::ui::kind_color("workout")), "rest": hex(th.data.rest), "trend": hex(th.data.trend),
+        }),
+        categories: crate::categories::names().iter().map(|k| style(k)).collect(),
+        other: style(""),
+        claude: crate::claude::find_cli(&d.settings).is_some(),
+        notifications: d.settings.phone_devices.iter().any(|p| p.id == device && p.push.is_some()),
+        transcribing: TRANSCRIBING.lock().unwrap().clone().unwrap_or_default().into_iter().collect(),
+    }
+}
+
+
+
+
 
 #[cfg(test)]
 mod tests {

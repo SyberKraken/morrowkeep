@@ -6,7 +6,7 @@ S.prog = { data: null, days: +(localStorage.getItem("mk_progdays") || 30), sel: 
 
 async function progLoad() {
   try {
-    S.prog.data = await api("/api/progress?days=" + S.prog.days);
+    S.prog.data = await screenData("progress", { days: S.prog.days }, "/api/progress?days=" + S.prog.days);
   } catch (e) {
     if (e.server) toast(e.message, 4000);
   }

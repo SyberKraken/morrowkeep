@@ -1,7 +1,9 @@
-// Keeps the app shell available when the PC can't be reached, so the phone app still opens
-// (and can queue entries). API requests always go to the network.
-const CACHE = "morrowkeep-shell-v11";
-const SHELL = ["/", "/core.js", "/core.wasm", "/app.js", "/plan.js", "/foods.js", "/train.js", "/progress.js", "/journal.js", "/manifest.webmanifest", "/icon.png"];
+// Keeps the app's files on the phone, so it opens at once, also without the PC (Tailscale off,
+// PC asleep, Morrowkeep closed). Cache first: the saved files are used straight away and refreshed
+// in the background; a new version (new CACHE name) installs as a whole set and is used from the
+// next open. API requests always go to the network.
+const CACHE = "morrowkeep-shell-v12";
+const SHELL = ["/", "/core.js", "/core.wasm", "/app.js", "/replica.js", "/plan.js", "/foods.js", "/train.js", "/progress.js", "/journal.js", "/manifest.webmanifest", "/icon.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -14,15 +16,19 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
-  // network first, so updates from the PC show up at once; the cache when offline
-  e.respondWith(
-    fetch(e.request)
-      .then((res) => {
+  const key = url.pathname === "/index.html" ? "/" : url.pathname;
+  const fresh = fetch(e.request)
+    .then((res) => {
+      if (res.ok) {
         const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(url.pathname === "/index.html" ? "/" : url.pathname, copy));
-        return res;
-      })
-      .catch(() => caches.match(url.pathname).then((r) => r || caches.match("/")))
+        caches.open(CACHE).then((c) => c.put(key, copy));
+      }
+      return res;
+    })
+    .catch(() => null);
+  e.waitUntil(fresh);
+  e.respondWith(
+    caches.match(key).then((cached) => cached || fresh.then((res) => res || caches.match("/")))
   );
 });
 

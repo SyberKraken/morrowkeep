@@ -7,7 +7,7 @@ S.train = { data: null, workout: null, open: null, session: null, play: null, su
 
 async function trainLoad() {
   try {
-    S.train.data = await api("/api/workouts");
+    S.train.data = await screenData("workouts", {}, "/api/workouts");
   } catch (e) {
     if (e.server) toast(e.message, 4000);
   }
@@ -266,7 +266,7 @@ function renderSummary() {
 Object.assign(ACTIONS, {
   async trainopen(el) {
     try {
-      S.train.workout = await api("/api/workout?id=" + encodeURIComponent(el.dataset.id));
+      S.train.workout = await screenData("workout", { id: el.dataset.id }, "/api/workout?id=" + encodeURIComponent(el.dataset.id));
       S.train.open = null;
       window.scrollTo(0, 0);
     } catch (e) {

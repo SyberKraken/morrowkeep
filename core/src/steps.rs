@@ -481,8 +481,8 @@ pub struct Snapshot {
     pub journal: Vec<JournalEntry>,
     pub foods: Library,
     pub workout_log: WorkoutLog,
-    /// workout id → the task it ticks off
-    pub workout_tasks: Vec<(String, String)>,
+    pub workouts: crate::workouts::WorkoutFile,
+    pub exercises: crate::workouts::ExerciseFile,
 }
 
 impl Store for Snapshot {
@@ -508,7 +508,7 @@ impl Store for Snapshot {
         &mut self.workout_log
     }
     fn workout_task(&self, workout_id: &str) -> Option<String> {
-        self.workout_tasks.iter().find(|(w, _)| w == workout_id).map(|(_, t)| t.clone())
+        self.workouts.workouts.iter().find(|w| w.id == workout_id).and_then(|w| w.task.clone())
     }
     fn changed(&mut self, _part: Part) {}
 }
@@ -625,7 +625,7 @@ mod tests {
         let mut gym = Item::new("Gym");
         gym.date = Some(today);
         s.items.push(gym.clone());
-        s.workout_tasks.push(("w1".into(), gym.id.clone()));
+        s.workouts.workouts.push(crate::workouts::Workout { id: "w1".into(), name: "Legs".into(), task: Some(gym.id.clone()), ..Default::default() });
         let session = Session { id: "s1".into(), date: today, start: "18:00".into(), duration_s: 1800, workout_id: "w1".into(), workout: "Legs".into(), sets: vec![], completed: true };
         assert!(apply(&mut s, &Step::WorkoutSession { session }, today).unwrap().contains("✔ Gym"));
         assert!(s.items[0].is_done_on(today));

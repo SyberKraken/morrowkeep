@@ -66,7 +66,12 @@ function mix(a, b) {
 
 async function api(path, opts = {}) {
   const headers = Object.assign({ Authorization: "Bearer " + S.token }, opts.headers || {});
-  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  // give up after a while, so an unreachable PC is noticed quickly (uploads get longer)
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), opts.timeout || 10000);
+  let res;
+  try { res = await fetch(path, Object.assign({}, opts, { headers, signal: ctl.signal })); }
+  finally { clearTimeout(timer); }
   let body = {};
   try { body = await res.json(); } catch (_) {}
   if (res.status === 401) {
@@ -120,15 +125,29 @@ async function flushQueue() {
   if (left.length < q.length) { toast(`Sent ${q.length - left.length} saved entr${q.length - left.length === 1 ? "y" : "ies"}`); await refresh(); }
 }
 
+/// Today's screen from the phone's copy.
+function drawState() {
+  if (RP.loaded) S.state = MK.call({ fn: "view", name: "state", today: localDate(), ...(S.day ? { day: S.day } : {}) });
+}
+
 async function refresh() {
+  if (!S.token) return;
+  drawState();
+  let changed = false;
   try {
-    S.state = await api("/api/state" + (S.day ? "?date=" + S.day : ""));
-    applyTheme(S.state.theme);
+    changed = await replicaSync();
     S.offline = false;
   } catch (e) {
-    if (!S.token) return;
-    S.offline = true;
+    S.offline = !e.server;
   }
+  if (RP.loaded) drawState();
+  else if (!S.offline) {
+    // no copy yet (e.g. this browser can't run core.wasm): straight from the PC
+    try { S.state = await api("/api/state" + (S.day ? "?date=" + S.day : "")); applyTheme(S.state.theme); }
+    catch (e) { S.offline = !e.server; }
+  }
+  // the open screen follows the new copy
+  if (changed && ONOPEN[S.tab]) ONOPEN[S.tab]();
   render();
 }
 
@@ -186,7 +205,7 @@ function headerHtml() {
   const q = queue().length;
   const on = S.state?.notifications;
   return `<header><span class="brand">Morrowkeep</span><span class="muted">${esc(S.state?.date_label || "")}
-    ${q ? `<span id="queue"> · ${q} waiting</span>` : ""}${S.offline ? ` · <span style="color:var(--warning)">PC offline</span>` : ""}
+    ${q ? `<span id="queue"> · ${q} waiting</span>` : ""}${S.offline ? ` · <span style="color:var(--warning)">PC offline${RP.loaded ? ` · as of ${esc(replicaAge())}` : ""}</span>` : ""}
     <button class="small" data-act="bell" aria-label="Notifications" style="margin-left:6px;${on ? "" : "opacity:.7"}">${on ? "🔔" : "🔕"}</button></span></header>
     ${S.bellOpen ? notifPanel() : ""}
     ${S.day ? `<div class="card row" style="border-color:var(--warning);padding:8px 12px"><span class="grow">📅 Logging for <b>${esc(S.state?.day_label || S.day)}</b></span>
@@ -440,7 +459,7 @@ async function uploadLabel(file) {
   rerender();
   try {
     const jpeg = await labelJpeg(file);
-    const r = await api("/api/food/label", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: jpeg });
+    const r = await api("/api/food/label", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: jpeg, timeout: 120000 });
     L.job = r.job;
     pollLabel(r.job);
   } catch (e) {
@@ -737,7 +756,7 @@ async function uploadAudio() {
   if (!P) return;
   const qs = new URLSearchParams(P.meta).toString();
   try {
-    const r = await api("/api/journal/audio?" + qs, { method: "POST", headers: { "Content-Type": "audio/wav" }, body: P.wav });
+    const r = await api("/api/journal/audio?" + qs, { method: "POST", headers: { "Content-Type": "audio/wav" }, body: P.wav, timeout: 180000 });
     S.pendingAudio = null;
     if (P.target === "quick") S.quickJournal = ""; else Object.assign(S.journal, { text: "", mood: null });
     toast(r.message || "Recording saved", 3500);
@@ -918,6 +937,8 @@ function goTab(tab) {
 window.addEventListener("DOMContentLoaded", async function start() {
   // Morrowkeep's rules (WebAssembly), from the service worker's copy when offline
   try { await MK.load(await (await fetch("/core.wasm")).arrayBuffer()); } catch (e) { console.warn("core.wasm", e); }
+  await replicaInit();
+  drawState();
   const saved = localStorage.getItem("mk_theme");
   if (saved) try { applyTheme(JSON.parse(saved)); } catch (_) {}
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

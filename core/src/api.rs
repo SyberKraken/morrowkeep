@@ -12,11 +12,38 @@
 //! - `trend` {weights} → [[date, kg], …] (7-day average)
 //! - `journal_streak` {journal, today} → days in a row
 //! - `food_log` {food, servings?, grams?, date, time?} → a FoodLog step with a new id
+//!
+//! The phone's copy is kept here between calls, so screens don't resend it:
+//! - `load` {snapshot, pc} → keeps the copy from the PC
+//! - `set_steps` {steps, today} → the copy with the waiting steps applied; {results}
+//! - `view` {name, today, …} → a screen (see `views.rs`): state {day}, agenda {days}, foods,
+//!   workouts, workout {id}, progress {days}, journal {q, pinned, voice, before}
+//! - `plan_entry_here` {text, day, today} → like plan_entry, on the kept copy
 
 use crate::foods::{Amount, Food, Library};
 use crate::steps::{self, Planned, Snapshot, Step};
+use crate::views::{self, Pc};
 use chrono::{NaiveDate, NaiveTime};
 use serde_json::{json, Value};
+use std::cell::RefCell;
+
+/// The phone's copy: as the PC sent it, and with the waiting steps applied.
+struct Kept {
+    base: Snapshot,
+    pc: Pc,
+    projected: Snapshot,
+}
+
+thread_local! {
+    static KEPT: RefCell<Option<Kept>> = const { RefCell::new(None) };
+}
+
+fn with_kept<T>(f: impl FnOnce(&mut Kept) -> Result<T, String>) -> Result<T, String> {
+    KEPT.with(|k| match k.borrow_mut().as_mut() {
+        Some(kept) => f(kept),
+        None => Err("no data loaded yet".into()),
+    })
+}
 
 /// Name the label-placeholder foods get on the phone until the PC has read the label.
 pub const LABEL_WAITING: &str = "📷 Label (waiting for Claude)";
@@ -79,6 +106,53 @@ fn dispatch(input: &str) -> Result<Value, String> {
             let date: NaiveDate = arg(&v, "date")?;
             let time: Option<NaiveTime> = arg(&v, "time")?;
             Ok(json!(Step::FoodLog { id: crate::clock::new_id(), food, servings: arg(&v, "servings")?, grams: arg(&v, "grams")?, date, time }))
+        }
+        "load" => {
+            let base: Snapshot = arg(&v, "snapshot")?;
+            let pc: Pc = arg(&v, "pc")?;
+            let projected = base.clone();
+            KEPT.with(|k| *k.borrow_mut() = Some(Kept { base, pc, projected }));
+            Ok(json!({ "ok": true }))
+        }
+        "set_steps" => {
+            let list: Vec<Step> = arg(&v, "steps")?;
+            let today: NaiveDate = arg(&v, "today")?;
+            with_kept(|k| {
+                k.projected = k.base.clone();
+                let results: Vec<Value> = list.iter().map(|st| project_one(&mut k.projected, st, today)).collect();
+                Ok(json!({ "results": results }))
+            })
+        }
+        "plan_entry_here" => {
+            let (day, today): (NaiveDate, NaiveDate) = (arg(&v, "day")?, arg(&v, "today")?);
+            let text: String = arg(&v, "text")?;
+            with_kept(|k| {
+                Ok(match steps::plan_entry(&text, day, today, &k.projected.view()) {
+                    Planned::Steps(s) => json!({ "steps": s }),
+                    Planned::Claude(f) => json!({ "claude": f }),
+                    Planned::Error(e) => json!({ "error": e }),
+                })
+            })
+        }
+        "view" => {
+            let today: NaiveDate = arg(&v, "today")?;
+            let name: String = arg(&v, "name")?;
+            with_kept(|k| {
+                let (d, pc) = (&k.projected, &k.pc);
+                Ok(match name.as_str() {
+                    "state" => views::state(d, pc, v.get("day").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or(today), today),
+                    "agenda" => views::agenda(d, pc, today, v["days"].as_i64().unwrap_or(14)),
+                    "foods" => views::foods(d),
+                    "workouts" => views::workouts(d),
+                    "workout" => views::workout(d, v["id"].as_str().unwrap_or(""))?,
+                    "progress" => views::progress(d, pc, today, v["days"].as_i64().unwrap_or(30)),
+                    "journal" => {
+                        let before: Option<NaiveDate> = v.get("before").and_then(|x| serde_json::from_value(x.clone()).ok());
+                        views::journal(d, pc, today, v["q"].as_str().unwrap_or(""), v["pinned"].as_bool().unwrap_or(false), v["voice"].as_bool().unwrap_or(false), before)
+                    }
+                    other => return Err(format!("unknown view \"{other}\"")),
+                })
+            })
         }
         other => Err(format!("unknown function \"{other}\"")),
     }
@@ -173,5 +247,23 @@ mod tests {
         let occ = call_v(json!({ "fn": "occurrences", "items": snap["items"], "from": "2026-11-10", "to": "2026-11-12" }));
         assert_eq!(occ[0][0], "2026-11-11");
         assert!(call_v(json!({ "fn": "nope" }))["error"].is_string());
+    }
+
+    #[test]
+    fn the_phone_keeps_its_copy_and_draws_screens_from_it() {
+        let today = "2026-11-10";
+        assert!(call_v(json!({ "fn": "view", "name": "state", "today": today }))["error"].is_string());
+        let snap = json!({ "calories": [{ "id": "a", "date": today, "kcal": 500, "description": "lunch", "source": "phone" }] });
+        call_v(json!({ "fn": "load", "snapshot": snap, "pc": { "claude": true } }));
+        let st = call_v(json!({ "fn": "view", "name": "state", "today": today }));
+        assert_eq!((st["calories"]["total"].as_u64(), st["claude"].as_bool()), (Some(500), Some(true)));
+        // waiting steps show on the screens; replacing them starts again from the PC's copy
+        let p = call_v(json!({ "fn": "plan_entry_here", "text": "200 kcal", "day": today, "today": today }));
+        call_v(json!({ "fn": "set_steps", "steps": p["steps"], "today": today }));
+        assert_eq!(call_v(json!({ "fn": "view", "name": "state", "today": today }))["calories"]["total"], 700);
+        call_v(json!({ "fn": "set_steps", "steps": [], "today": today }));
+        assert_eq!(call_v(json!({ "fn": "view", "name": "state", "today": today }))["calories"]["total"], 500);
+        let ag = call_v(json!({ "fn": "view", "name": "agenda", "today": today, "days": 3 }));
+        assert_eq!(ag["days"].as_array().unwrap().len(), 3);
     }
 }
